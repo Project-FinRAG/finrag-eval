@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import date
-from enum import Enum
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 
-class FilingType(str, Enum):
+class FilingType(StrEnum):
     TEN_K = "10-K"
     TEN_Q = "10-Q"
     EIGHT_K = "8-K"
@@ -75,7 +75,7 @@ class Answer(BaseModel):
     latency_ms: int
 
 
-class QuestionType(str, Enum):
+class QuestionType(StrEnum):
     FACTUAL_LOOKUP = "factual_lookup"
     MULTI_DOC_SYNTHESIS = "multi_doc_synthesis"
     NUMERICAL_REASONING = "numerical_reasoning"
