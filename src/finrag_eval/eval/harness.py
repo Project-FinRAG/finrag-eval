@@ -67,9 +67,9 @@ class EvalHarness:
 
     def __init__(
         self,
-        retriever,  # type: ignore[no-untyped-def]
-        generator,  # type: ignore[no-untyped-def]
-        judge,  # type: ignore[no-untyped-def]
+        retriever: Retriever,
+        generator: Generator,
+        judge: AnswerJudge,
         dataset: QADataset,
     ) -> None:
         self.retriever = retriever
