@@ -1,0 +1,155 @@
+[project]
+name = "finrag-eval"
+version = "0.1.0"
+description = "An evaluation-first financial document intelligence system for SEC filing QA."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "FinRAG-Eval Team" },
+]
+
+dependencies = [
+    # Core
+    "pydantic>=2.7",
+    "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",
+    "structlog>=24.4",
+    "tenacity>=9.0",
+
+    # Ingestion
+    "requests>=2.32",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.3",
+    "sec-edgar-downloader>=5.0",
+
+    # Retrieval
+    "rank-bm25>=0.2.2",
+    "sentence-transformers>=3.0",
+    "chromadb>=0.5",
+
+    # Synthesis
+    "openai>=1.50",
+    "anthropic>=0.39",
+    "tiktoken>=0.8",
+
+    # Evaluation
+    "ragas>=0.2",
+    "datasets>=3.0",
+
+    # API
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+
+    # Frontend
+    "streamlit>=1.40",
+    "plotly>=5.24",
+
+    # Utilities
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "tqdm>=4.66",
+    "typer>=0.13",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+    "ipykernel>=6.29",
+    "ipython>=8.28",
+]
+
+[project.scripts]
+finrag = "finrag_eval.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/finrag_eval"]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Ruff
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",  # line length is handled by formatter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["B011"]  # allow `assert False` in tests
+"notebooks/**" = ["E402"]  # imports not at top
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Mypy
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+ignore_missing_imports = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pytest
+# ─────────────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--cov=finrag_eval",
+    "--cov-report=term-missing",
+    "--cov-report=xml",
+]
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests requiring external services",
+    "eval: marks evaluation regression tests",
+]
+
+[tool.coverage.run]
+source = ["src/finrag_eval"]
+omit = ["*/tests/*", "*/notebooks/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
