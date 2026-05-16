@@ -22,9 +22,9 @@ from finrag_eval.common import Answer, QAPair
 
 
 class JudgeScore(BaseModel):
-    correctness: float       # 0-1
-    completeness: float      # 0-1
-    faithfulness: float      # 0-1
+    correctness: float  # 0-1
+    completeness: float  # 0-1
+    faithfulness: float  # 0-1
     citation_support: float  # 0-1
     abstention_correct: bool
     reasoning: str

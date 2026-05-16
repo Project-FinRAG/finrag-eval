@@ -45,10 +45,7 @@ def mean_reciprocal_rank(retrieved: list[str], gold: set[str]) -> float:
 
 def ndcg_at_k(retrieved: list[str], gold: set[str], k: int) -> float:
     """Normalized Discounted Cumulative Gain at k. Binary relevance."""
-    dcg = sum(
-        (1.0 / math.log2(i + 2)) if r in gold else 0.0
-        for i, r in enumerate(retrieved[:k])
-    )
+    dcg = sum((1.0 / math.log2(i + 2)) if r in gold else 0.0 for i, r in enumerate(retrieved[:k]))
     ideal_hits = min(len(gold), k)
     idcg = sum(1.0 / math.log2(i + 2) for i in range(ideal_hits))
     return dcg / idcg if idcg > 0 else 0.0
