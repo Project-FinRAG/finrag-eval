@@ -2,7 +2,7 @@
 
 Goal: prove the end-to-end pipeline works on one filing before generalizing.
 Run from repo root:
-    uv run python scripts/day1_first_filing.py
+    uv run python scripts/01_naive_extraction.py
 """
 
 from __future__ import annotations
