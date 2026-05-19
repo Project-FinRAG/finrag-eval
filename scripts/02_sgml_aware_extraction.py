@@ -2,8 +2,14 @@
 SGML container, parse it, chunk it. Compare numbers to Day 1.
 """
 
+
 from __future__ import annotations
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import os
 import re
 from pathlib import Path
 
@@ -15,8 +21,13 @@ from sec_edgar_downloader import Downloader
 TICKER = "AAPL"
 FILING_TYPE = "10-K"
 NUM_FILINGS = 1
-COMPANY_NAME = "FinRAG-Eval Team"
-EMAIL = "bhardwaj.may@northeastern.edu"
+COMPANY_NAME = os.environ.get("SEC_COMPANY_NAME", "FinRAG-Eval Team")
+EMAIL = os.environ.get("SEC_CONTACT_EMAIL")
+if not EMAIL:
+    raise SystemExit(
+        "SEC_CONTACT_EMAIL environment variable is required. "
+        "See .env.example."
+    )
 DATA_DIR = Path("./data/raw")
 CHUNK_SIZE_TOKENS = 512
 OVERLAP_TOKENS = 64
