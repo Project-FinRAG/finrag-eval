@@ -33,8 +33,7 @@ dependencies = [
     "tiktoken>=0.8",
 
     # Evaluation
-    "ragas>=0.2",
-    "datasets>=3.0",
+
 
     # API
     "fastapi>=0.115",
@@ -55,6 +54,10 @@ dependencies = [
 indexing = [
     "sentence-transformers>=3.0",
     "chromadb>=0.5",
+]
+eval = [
+    "ragas>=0.2",
+    "datasets>=3.0",
 ]
 dev = [
     "pytest>=8.3",
