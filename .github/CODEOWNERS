@@ -1,0 +1,25 @@
+# Code owners for FinRAG-Eval
+#
+# Every PR requires approval from a listed code owner before it can be merged.
+# This is enforced by the "Require review from Code Owners" branch protection
+# rule on main.
+#
+# Format:  file_pattern  @github-username
+# Later patterns override earlier ones (last match wins).
+#
+# Docs: https://docs.github.com/en/repositories/managing-your-repositories-settings-and-security/customizing-your-repository/about-code-owners
+
+# ─── Default owner ──────────────────────────────────────────────────────────
+# Mayank is the technical lead and the default approver for all changes.
+# All PRs require Mayank's approval before merge.
+*       @Mayank-cmd
+
+# ─── Future role-based ownership ────────────────────────────────────────────
+# When teammates take role-specific ownership, add per-path entries below.
+# Per-path entries OVERRIDE the global * entry.
+#
+# /src/finrag_eval/eval/         @Mayank-cmd @<eval-lead-username>
+# /src/finrag_eval/retrieval/    @Mayank-cmd @<retrieval-lead-username>
+# /.github/                      @Mayank-cmd
+# /docs/decisions/               @Mayank-cmd
+# /pyproject.toml                @Mayank-cmd
