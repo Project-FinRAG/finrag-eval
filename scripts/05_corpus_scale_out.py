@@ -148,6 +148,7 @@ def html_to_text(html: str) -> str:
     return text
 
 
+
 def find_sections(text: str) -> dict[str, tuple[int, int, str]]:
     last_match: dict[str, re.Match[str]] = {}
     for m in ITEM_HEADER_RE.finditer(text):
