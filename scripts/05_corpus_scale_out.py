@@ -42,7 +42,7 @@ TICKERS = [
 ]
 
 FILING_TYPES = ["10-K"]   # Start with 10-K only; add 10-Q after this works
-YEARS_TO_FETCH = 2        # Most recent 2 years per filing type
+YEARS_TO_FETCH = 4        # Most recent 2 years per filing type
 
 COMPANY_NAME = os.environ.get("SEC_COMPANY_NAME", "FinRAG-Eval Team")
 EMAIL = os.environ.get("SEC_CONTACT_EMAIL")
@@ -281,7 +281,14 @@ def section_diagnostics(sections: dict, total_chars: int) -> dict:
         "item_7_chars": (item_7[1] - item_7[0]) if item_7 else 0,
     }
 
-def chunk_section_aware(text, sections, ticker, filing_type, accession, encoder):
+def chunk_section_aware(
+    text, sections, ticker, filing_type, accession, encoder,
+    chunking_method="section_aware",
+):
+    """Emit section-aware chunks. The chunking_method parameter lets callers
+    distinguish strict section-aware chunks from hybrid_section_aware chunks
+    (same mechanism, lower confidence in section boundaries). Downstream
+    consumers can filter on this field in the chunk JSONL."""
     chunks = []
     chunk_idx = 0
     step = CHUNK_SIZE_TOKENS - OVERLAP_TOKENS
@@ -298,7 +305,7 @@ def chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
                 ticker=ticker, filing_type=filing_type, accession=accession,
                 chunk_id=f"{ticker}_{accession}_item{item_num}_{chunk_idx:04d}",
                 text=encoder.decode(window), section_label=section_label,
-                chunking_method="section_aware", token_count=len(window),
+                chunking_method=chunking_method, token_count=len(window),
             ))
             chunk_idx += 1
     return chunks
@@ -350,10 +357,16 @@ def process_filing(ticker, filing_type, encoder, dl):
             diag = section_diagnostics(sections, len(text))
 
             if reliable:
-                chunks = chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
+                chunks = chunk_section_aware(
+                    text, sections, ticker, filing_type, accession, encoder,
+                    chunking_method="section_aware",
+                )
                 method = "section_aware"
             elif is_partially_usable_section_map(sections, len(text)):
-                chunks = chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
+                chunks = chunk_section_aware(
+                    text, sections, ticker, filing_type, accession, encoder,
+                    chunking_method="hybrid_section_aware",
+                )
                 method = "hybrid_section_aware"
             else:
                 chunks = chunk_fixed_size(text, ticker, filing_type, accession, encoder)
@@ -450,7 +463,9 @@ def main():
     successful = [s for s in all_stats if s.get("chunks_produced", 0) > 0]
     failed = [s for s in all_stats if s.get("error")]
     section_aware = [s for s in successful if s.get("method_used") == "section_aware"]
+    hybrid_section = [s for s in successful if s.get("method_used") == "hybrid_section_aware"]
     fixed_size = [s for s in successful if s.get("method_used") == "fixed_size"]
+    section_labeled = section_aware + hybrid_section
     total_chunks = sum(s.get("chunks_produced", 0) for s in successful)
 
     print(f"\n{'=' * 70}")
@@ -458,10 +473,11 @@ def main():
     print(f"{'=' * 70}")
     print(f"Elapsed:              {elapsed / 60:.1f} minutes")
     print(f"Filings processed:    {len(successful)} successful, {len(failed)} failed")
-    print(f"Section-aware:        {len(section_aware)}/{len(successful)} "
-          f"({len(section_aware) / max(len(successful), 1):.0%})")
-    print(f"Fixed-size:           {len(fixed_size)}/{len(successful)} "
-          f"({len(fixed_size) / max(len(successful), 1):.0%})")
+    n = max(len(successful), 1)
+    print(f"Fully section-aware:  {len(section_aware)}/{len(successful)} ({len(section_aware)/n:.1%})")
+    print(f"Hybrid section-aware: {len(hybrid_section)}/{len(successful)} ({len(hybrid_section)/n:.1%})")
+    print(f"Fixed-size fallback:  {len(fixed_size)}/{len(successful)} ({len(fixed_size)/n:.1%})")
+    print(f"Total section-labeled: {len(section_labeled)}/{len(successful)} ({len(section_labeled)/n:.1%})")
     print(f"Total chunks:         {total_chunks:,}")
     print(f"Stats written to:     {STATS_PATH}")
     print(f"Chunks written to:    {CHUNKS_DIR}/  ({len(list(CHUNKS_DIR.glob('*.jsonl')))} files)")
