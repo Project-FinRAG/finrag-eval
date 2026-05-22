@@ -166,18 +166,120 @@ def find_sections(text: str) -> dict[str, tuple[int, int, str]]:
 def is_section_detection_reliable(sections, total_chars: int) -> tuple[bool, str]:
     if total_chars == 0 or not sections:
         return False, "no sections detected"
+
     captured = sum(end - start for start, end, _ in sections.values())
-    if captured / total_chars < MIN_COVERAGE:
-        return False, f"low coverage ({captured / total_chars:.1%})"
-    largest = max(end - start for start, end, _ in sections.values())
-    if largest / total_chars > MAX_SECTION_DOMINANCE:
-        return False, f"section dominance ({largest / total_chars:.1%})"
+    coverage = captured / total_chars
+    if coverage < MIN_COVERAGE:
+        return False, f"low coverage ({coverage:.1%})"
+
+    # Check Item 7 health FIRST. If MD&A is broken, we don't trust the
+    # rest of the section map enough to relax other gates.
     item_7 = sections.get("7")
-    if not item_7 or (item_7[1] - item_7[0]) < MIN_ITEM_7_CHARS:
-        size = (item_7[1] - item_7[0]) if item_7 else 0
-        return False, f"Item 7 too small ({size:,} chars)"
+    item_7_size = (item_7[1] - item_7[0]) if item_7 else 0
+    item_7_healthy = item_7_size >= MIN_ITEM_7_CHARS
+
+    # Section dominance check. Item 8 (Financial Statements) and Item 15
+    # (Exhibits) can legitimately be very large for financial firms.
+    # But ONLY accept dominance if Item 7 is healthy — otherwise the
+    # large section is likely swallowing content from missing boundaries.
+    largest_item, largest_tuple = max(
+        sections.items(),
+        key=lambda kv: kv[1][1] - kv[1][0],
+    )
+    largest_size = largest_tuple[1] - largest_tuple[0]
+    largest_ratio = largest_size / total_chars
+
+    if largest_ratio > MAX_SECTION_DOMINANCE:
+        # Conditional acceptance for Item 8 / Item 15 dominance
+        if (
+            largest_item in {"8", "15"}
+            and largest_ratio <= 0.75
+            and len(sections) >= 12
+            and item_7_healthy
+        ):
+            pass  # accept the filing despite dominance
+        else:
+            return False, (
+                f"section dominance: Item {largest_item} "
+                f"({largest_ratio:.1%})"
+            )
+
+    if not item_7_healthy:
+        return False, f"Item 7 too small ({item_7_size:,} chars)"
+
     return True, "all signals pass"
 
+def is_partially_usable_section_map(sections, total_chars: int) -> bool:
+    """Less strict than is_section_detection_reliable. Returns True when the
+    section map is good enough to produce section-labeled chunks even though
+    it failed a quality gate.
+
+    Use case: filings that hit the dominance gate or Item-7 size gate, but
+    still have most sections detected with reasonable coverage. Better to
+    label these chunks with section metadata (acknowledging the imperfection)
+    than to discard the structure entirely and emit fixed-size chunks.
+
+    Critically: we require at least one high-value item (1, 1A, 7, 8) to
+    have *substantial* content, not just be detected. This filters out
+    "incorporation by reference" filings (e.g., IBM, WFC) where MD&A
+    section headers exist but point to external documents.
+    """
+    if total_chars == 0 or not sections:
+        return False
+
+    # Enough sections to be meaningful
+    if len(sections) < 10:
+        return False
+
+    # Captured coverage should be at least 50%
+    captured = sum(end - start for start, end, _ in sections.values())
+    if captured / total_chars < 0.50:
+        return False
+
+    # At least one high-value item must have substantial content (5K+ chars).
+    # Just detecting the header isn't enough — IBM's Item 7 is 212 chars
+    # because the actual MD&A is incorporated by reference from another doc.
+    important_items = {"1", "1A", "7", "8"}
+    has_substantial_important_item = any(
+        item in sections and (sections[item][1] - sections[item][0]) >= 5000
+        for item in important_items
+    )
+    if not has_substantial_important_item:
+        return False
+
+    return True
+
+def section_diagnostics(sections: dict, total_chars: int) -> dict:
+    """Lightweight per-filing diagnostics: which section dominates,
+    how much of the document is captured, Item 7 size.
+
+    Always populated, including for filings that fail the reliability check.
+    Used for downstream visibility — e.g., is the dominant section
+    legitimately Item 8 (Financial Statements) or wrongly-labeled?
+    """
+    if not sections or total_chars == 0:
+        return {
+            "captured_ratio": 0.0,
+            "largest_section_item": "",
+            "largest_section_ratio": 0.0,
+            "item_7_chars": 0,
+        }
+
+    captured = sum(end - start for start, end, _ in sections.values())
+    largest_item, largest_tuple = max(
+        sections.items(),
+        key=lambda kv: kv[1][1] - kv[1][0],
+    )
+    item_7 = sections.get("7")
+
+    return {
+        "captured_ratio": round(captured / total_chars, 4),
+        "largest_section_item": largest_item,
+        "largest_section_ratio": round(
+            (largest_tuple[1] - largest_tuple[0]) / total_chars, 4
+        ),
+        "item_7_chars": (item_7[1] - item_7[0]) if item_7 else 0,
+    }
 
 def chunk_section_aware(text, sections, ticker, filing_type, accession, encoder):
     chunks = []
@@ -245,10 +347,14 @@ def process_filing(ticker, filing_type, encoder, dl):
             text = html_to_text(filing_html)
             sections = find_sections(text)
             reliable, reason = is_section_detection_reliable(sections, len(text))
+            diag = section_diagnostics(sections, len(text))
 
             if reliable:
                 chunks = chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
                 method = "section_aware"
+            elif is_partially_usable_section_map(sections, len(text)):
+                chunks = chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
+                method = "hybrid_section_aware"
             else:
                 chunks = chunk_fixed_size(text, ticker, filing_type, accession, encoder)
                 method = "fixed_size"
@@ -263,6 +369,10 @@ def process_filing(ticker, filing_type, encoder, dl):
                 "quality_check_reason": reason,
                 "method_used": method,
                 "chunks_produced": len(chunks),
+                "captured_ratio": diag["captured_ratio"],
+                "largest_section_item": diag["largest_section_item"],
+                "largest_section_ratio": diag["largest_section_ratio"],
+                "item_7_chars": diag["item_7_chars"],
                 "error": "",
             }
             results.append((chunks, stats))
@@ -326,7 +436,8 @@ def main():
     if all_stats:
         keys = ["ticker", "filing_type", "accession", "total_chars", "sections_detected",
                 "quality_check_passed", "quality_check_reason", "method_used",
-                "chunks_produced", "error"]
+                "chunks_produced", "captured_ratio", "largest_section_item",
+                "largest_section_ratio", "item_7_chars", "error"]
         with STATS_PATH.open("w", encoding="utf-8") as f:
             f.write(",".join(keys) + "\n")
             for s in all_stats:
