@@ -42,7 +42,7 @@ TICKERS = [
 ]
 
 FILING_TYPES = ["10-K"]   # Start with 10-K only; add 10-Q after this works
-YEARS_TO_FETCH = 2        # Most recent 2 years per filing type
+YEARS_TO_FETCH = 4        # Most recent 4 years per filing type
 
 COMPANY_NAME = os.environ.get("SEC_COMPANY_NAME", "FinRAG-Eval Team")
 EMAIL = os.environ.get("SEC_CONTACT_EMAIL")
@@ -281,7 +281,10 @@ def section_diagnostics(sections: dict, total_chars: int) -> dict:
         "item_7_chars": (item_7[1] - item_7[0]) if item_7 else 0,
     }
 
-def chunk_section_aware(text, sections, ticker, filing_type, accession, encoder):
+def chunk_section_aware(
+    text, sections, ticker, filing_type, accession, encoder,
+    chunking_method="section_aware",
+):
     chunks = []
     chunk_idx = 0
     step = CHUNK_SIZE_TOKENS - OVERLAP_TOKENS
@@ -298,7 +301,7 @@ def chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
                 ticker=ticker, filing_type=filing_type, accession=accession,
                 chunk_id=f"{ticker}_{accession}_item{item_num}_{chunk_idx:04d}",
                 text=encoder.decode(window), section_label=section_label,
-                chunking_method="section_aware", token_count=len(window),
+                chunking_method=chunking_method, token_count=len(window),
             ))
             chunk_idx += 1
     return chunks
@@ -350,10 +353,16 @@ def process_filing(ticker, filing_type, encoder, dl):
             diag = section_diagnostics(sections, len(text))
 
             if reliable:
-                chunks = chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
+                chunks = chunk_section_aware(
+                    text, sections, ticker, filing_type, accession, encoder,
+                    chunking_method="section_aware",
+                )
                 method = "section_aware"
             elif is_partially_usable_section_map(sections, len(text)):
-                chunks = chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
+                chunks = chunk_section_aware(
+                    text, sections, ticker, filing_type, accession, encoder,
+                    chunking_method="hybrid_section_aware",
+                )
                 method = "hybrid_section_aware"
             else:
                 chunks = chunk_fixed_size(text, ticker, filing_type, accession, encoder)
