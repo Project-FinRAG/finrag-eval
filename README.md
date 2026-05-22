@@ -1,7 +1,7 @@
 # FinRAG-Eval
 
-[![CI](https://github.com/YOUR_ORG/finrag-eval/actions/workflows/ci.yml/badge.svg)](https://github.com/YOUR_ORG/finrag-eval/actions/workflows/ci.yml)
-[![Eval Regression](https://github.com/YOUR_ORG/finrag-eval/actions/workflows/eval-regression.yml/badge.svg)](https://github.com/YOUR_ORG/finrag-eval/actions/workflows/eval-regression.yml)
+[![CI](https://github.com/Project-FinRAG/finrag-eval/actions/workflows/ci.yml/badge.svg)](https://github.com/Project-FinRAG/finrag-eval/actions/workflows/ci.yml)
+[![Eval Regression](https://github.com/Project-FinRAG/finrag-eval/actions/workflows/eval-regression.yml/badge.svg)](https://github.com/Project-FinRAG/finrag-eval/actions/workflows/eval-regression.yml)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
@@ -61,7 +61,7 @@ The four core packages (`ingestion`, `retrieval`, `synthesis`, `eval`) each expo
 
 ```bash
 # Clone
-git clone https://github.com/YOUR_ORG/finrag-eval.git
+git clone https://github.com/Project-FinRAG/finrag-eval.git
 cd finrag-eval
 
 # Install dependencies
