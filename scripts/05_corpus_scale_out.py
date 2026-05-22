@@ -112,19 +112,12 @@ def extract_primary_document(submission: str, doc_type: str) -> str:
 def html_to_text(html: str) -> str:
     """Convert iXBRL/HTML to clean narrative text.
 
-    SEC 10-K filings use inline XBRL (iXBRL): narrative HTML interleaved with
-    machine-readable XBRL tags. The default BeautifulSoup get_text() extracts
-    content from <ix:hidden> blocks (which contain structured XBRL data dumps),
-    contaminating the output with us-gaap element references.
-
-    Fix:
-      - Strip the non-standard <XBRL> SEC wrapper
-      - Decompose <ix:hidden>, <ix:header>, <ix:references>, <ix:resources>
-        (pure machine-readable blocks; no narrative)
-      - Unwrap remaining <ix:*> tags so narrative text wrapped in iXBRL markup
-        (ix:nonNumeric, ix:nonFraction) survives
+    SEC 10-K filings use inline XBRL: narrative HTML interleaved with
+    machine-readable XBRL tags. Default BeautifulSoup get_text() extracts
+    content from <ix:hidden> blocks containing structured XBRL data dumps,
+    contaminating output with us-gaap element references.
     """
-    # Strip the non-standard SEC <XBRL> wrapper before parsing
+    # Strip non-standard SEC <XBRL> wrapper before parsing
     html = re.sub(r"</?XBRL>", "", html, flags=re.IGNORECASE)
 
     soup = BeautifulSoup(html, "lxml")
@@ -133,12 +126,12 @@ def html_to_text(html: str) -> str:
     for tag in soup(["script", "style"]):
         tag.decompose()
 
-    # Remove iXBRL machine-readable blocks (no narrative content)
+    # Remove iXBRL machine-readable blocks (no narrative)
     for tag_name in ("ix:hidden", "ix:references", "ix:resources", "ix:header"):
         for tag in soup.find_all(re.compile(rf"^{tag_name}$", re.IGNORECASE)):
             tag.decompose()
 
-    # Unwrap remaining ix:* tags (preserve narrative inside iXBRL markup)
+    # Unwrap remaining ix:* tags so narrative inside iXBRL markup survives
     for tag in soup.find_all(re.compile(r"^ix:", re.IGNORECASE)):
         tag.unwrap()
 
@@ -146,6 +139,7 @@ def html_to_text(html: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"[ \t]+", " ", text)
     return text
+
 
 
 def find_sections(text: str) -> dict[str, tuple[int, int, str]]:
