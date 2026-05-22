@@ -209,6 +209,46 @@ def is_section_detection_reliable(sections, total_chars: int) -> tuple[bool, str
 
     return True, "all signals pass"
 
+def is_partially_usable_section_map(sections, total_chars: int) -> bool:
+    """Less strict than is_section_detection_reliable. Returns True when the
+    section map is good enough to produce section-labeled chunks even though
+    it failed a quality gate.
+
+    Use case: filings that hit the dominance gate or Item-7 size gate, but
+    still have most sections detected with reasonable coverage. Better to
+    label these chunks with section metadata (acknowledging the imperfection)
+    than to discard the structure entirely and emit fixed-size chunks.
+
+    Critically: we require at least one high-value item (1, 1A, 7, 8) to
+    have *substantial* content, not just be detected. This filters out
+    "incorporation by reference" filings (e.g., IBM, WFC) where MD&A
+    section headers exist but point to external documents.
+    """
+    if total_chars == 0 or not sections:
+        return False
+
+    # Enough sections to be meaningful
+    if len(sections) < 10:
+        return False
+
+    # Captured coverage should be at least 50%
+    captured = sum(end - start for start, end, _ in sections.values())
+    if captured / total_chars < 0.50:
+        return False
+
+    # At least one high-value item must have substantial content (5K+ chars).
+    # Just detecting the header isn't enough — IBM's Item 7 is 212 chars
+    # because the actual MD&A is incorporated by reference from another doc.
+    important_items = {"1", "1A", "7", "8"}
+    has_substantial_important_item = any(
+        item in sections and (sections[item][1] - sections[item][0]) >= 5000
+        for item in important_items
+    )
+    if not has_substantial_important_item:
+        return False
+
+    return True
+
 def section_diagnostics(sections: dict, total_chars: int) -> dict:
     """Lightweight per-filing diagnostics: which section dominates,
     how much of the document is captured, Item 7 size.
@@ -312,6 +352,9 @@ def process_filing(ticker, filing_type, encoder, dl):
             if reliable:
                 chunks = chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
                 method = "section_aware"
+            elif is_partially_usable_section_map(sections, len(text)):
+                chunks = chunk_section_aware(text, sections, ticker, filing_type, accession, encoder)
+                method = "hybrid_section_aware"
             else:
                 chunks = chunk_fixed_size(text, ticker, filing_type, accession, encoder)
                 method = "fixed_size"
