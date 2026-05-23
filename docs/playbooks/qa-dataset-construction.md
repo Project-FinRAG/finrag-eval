@@ -108,7 +108,7 @@ Field reference:
 
 ## Construction process (per pair)
 
-1. **Pick a company and a filing.** Start with the section-aware ones (clean chunk labels). AAPL, BAC, GS are good starters.
+1. **Pick a company and a filing.** Start with `section_aware` filings (see tier table below). AAPL, GOOGL, GS, MA are good starters — clean chunk labels and complete section coverage. BAC has good Item 1 / 1A / 8 content but its Item 7 is parser-broken; if you write pairs against BAC, avoid Item 7.
 2. **Open the chunks file:** `data/processed/chunks/AAPL_10-K_<accession>.jsonl`
 3. **Read a section.** Pick something substantive — Risk Factors (Item 1A), MD&A (Item 7), Business (Item 1).
 4. **Formulate a question** that's specific, answerable from the section, and not exact-string-matched.
@@ -151,23 +151,41 @@ This is the "inter-annotator agreement" sanity check. It's also the foundation f
 
 ## Where the chunks live
 
-```
-data/processed/chunks/
-├── AAPL_10-K_0000320193-25-000079.jsonl       # 114 chunks, section-aware
-├── BAC_10-K_0000070858-26-000157.jsonl        # 485 chunks, section-aware
-├── GS_10-K_0000886982-26-000091.jsonl         # 559 chunks, section-aware
-├── JPM_10-K_0001628280-26-008131.jsonl        # 814 chunks, fixed-size fallback
-├── MSFT_10-K_0000950170-25-100235.jsonl       # 232 chunks, fixed-size fallback
-└── ...(94 more files)
-```
+The v0.1 corpus has 198 filings across 49 companies × 4 years. Chunks are classified into three tiers, recorded as `chunking_method` in both `data/processed/corpus_stats.csv` (per-filing) and the chunk JSONL records (per-chunk):
 
-Section-aware files have chunks with labels like `"Item 1A - Risk Factors"`. Fixed-size files have positional labels like `"chunk_47"`. Start with section-aware filings — your QA pairs will have cleaner citations.
+| Tier | Count | What it means |
+|---|---|---|
+| `section_aware` | 163 (82.3%) | Section detection passed all strict quality gates — Item boundaries are reliable, section labels are trustworthy |
+| `hybrid_section_aware` | 23 (11.6%) | Section map is usable but failed at least one strict gate (e.g., Item 7 too short, Item 8/15 dominance). Section labels exist but should be treated as lower-confidence |
+| `fixed_size` | 12 (6.1%) | Section detection failed; chunks are 512-token windows with no semantic labels. Affects 3 companies × 4 years: MS, C, INTC |
+
+Example file inventory (from v0.1, May 22):
+
+​```
+data/processed/chunks/
+├── AAPL_10-K_0000320193-25-000079.jsonl   # 114 chunks, section_aware
+├── BAC_10-K_0000070858-25-000139.jsonl    # ~480 chunks, hybrid_section_aware
+├── GS_10-K_0000886982-25-000099.jsonl     # ~560 chunks, section_aware
+├── MSFT_10-K_0000950170-25-100235.jsonl   # ~230 chunks, hybrid_section_aware
+├── MS_10-K_0000895421-25-000304.jsonl     # ~400 chunks, fixed_size
+└── ...(193 more files)
+​```
+
+**Where to start writing pairs.** Prefer `section_aware` filings for your first ~50 pairs — citations are cleaner and the chunk boundaries follow real document structure. Examples: AAPL, GOOGL, GS, MA, V, JPM-pre-2024. After warming up, write pairs against `hybrid_section_aware` filings (MSFT, BAC, IBM, WFC) — section labels are usable but may have one weak Item; cross-check before citing. Avoid `fixed_size` filings (MS, C, INTC) for section-specific questions since they have no semantic labels — but they can be used for general retrieval questions where the answer's location within the filing doesn't matter.
+
+To find which tier a filing belongs to:
+
+​```bash
+# Per-filing tier classification
+head -1 data/processed/corpus_stats.csv  # see all columns
+grep MSFT data/processed/corpus_stats.csv  # find a specific company
+​```
 
 Sample a chunk:
 
-```bash
+​```bash
 head -1 data/processed/chunks/AAPL_10-K_0000320193-25-000079.jsonl | python -m json.tool
-```
+​```
 
 ---
 
@@ -190,5 +208,6 @@ The QA dataset is done when:
 - [ ] Calibration check passed (Mayank's answers match gold ≥80% on a 5-pair sample)
 - [ ] Schema validates (one JSON object per line, all required fields present)
 - [ ] PR opened with the file + this playbook updated if anything changed
+- [ ] All pairs pass `uv run python scripts/verify_qa_pairs.py`
 
 That's the foundation everything else in the project measures against. Take care with it.
