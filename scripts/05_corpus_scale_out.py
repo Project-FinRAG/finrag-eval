@@ -459,7 +459,9 @@ def main():
     successful = [s for s in all_stats if s.get("chunks_produced", 0) > 0]
     failed = [s for s in all_stats if s.get("error")]
     section_aware = [s for s in successful if s.get("method_used") == "section_aware"]
+    hybrid_section = [s for s in successful if s.get("method_used") == "hybrid_section_aware"]
     fixed_size = [s for s in successful if s.get("method_used") == "fixed_size"]
+    section_labeled = section_aware + hybrid_section
     total_chunks = sum(s.get("chunks_produced", 0) for s in successful)
 
     print(f"\n{'=' * 70}")
@@ -467,10 +469,15 @@ def main():
     print(f"{'=' * 70}")
     print(f"Elapsed:              {elapsed / 60:.1f} minutes")
     print(f"Filings processed:    {len(successful)} successful, {len(failed)} failed")
-    print(f"Section-aware:        {len(section_aware)}/{len(successful)} "
-          f"({len(section_aware) / max(len(successful), 1):.0%})")
-    print(f"Fixed-size:           {len(fixed_size)}/{len(successful)} "
-          f"({len(fixed_size) / max(len(successful), 1):.0%})")
+    n = max(len(successful), 1)
+    print(f"Fully section-aware:  {len(section_aware)}/{len(successful)} "
+          f"({len(section_aware) / n:.1%})")
+    print(f"Hybrid section-aware: {len(hybrid_section)}/{len(successful)} "
+          f"({len(hybrid_section) / n:.1%})")
+    print(f"Fixed-size fallback:  {len(fixed_size)}/{len(successful)} "
+          f"({len(fixed_size) / n:.1%})")
+    print(f"Total section-labeled: {len(section_labeled)}/{len(successful)} "
+          f"({len(section_labeled) / n:.1%})")
     print(f"Total chunks:         {total_chunks:,}")
     print(f"Stats written to:     {STATS_PATH}")
     print(f"Chunks written to:    {CHUNKS_DIR}/  ({len(list(CHUNKS_DIR.glob('*.jsonl')))} files)")
