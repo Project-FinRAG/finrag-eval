@@ -91,7 +91,11 @@ class BM25Retriever:
         with open(self.index_path / "chunks.pkl", "wb") as f:
             pickle.dump(self._chunks, f)
         with open(self.index_path / "stats.json", "w") as f:
-            json.dump({"num_chunks": len(chunks), "build_time_ms": round(self._build_time_ms, 1)}, f, indent=2)
+            json.dump(
+                {"num_chunks": len(chunks), "build_time_ms": round(self._build_time_ms, 1)},
+                f,
+                indent=2,
+            )
 
         print(f"BM25 index built: {len(chunks):,} chunks in {self._build_time_ms:.0f}ms")
         print(f"Saved to {self.index_path}")
