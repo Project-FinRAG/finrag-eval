@@ -1,9 +1,12 @@
 """Smoke tests for BM25 retriever."""
 from __future__ import annotations
+
 from pathlib import Path
+
 import pytest
-from finrag_eval.retrieval.bm25 import BM25Retriever, load_chunks_from_jsonl
+
 from finrag_eval.common import RetrievalResult
+from finrag_eval.retrieval.bm25 import BM25Retriever, load_chunks_from_jsonl
 
 QUERIES = [
     "what are the main risk factors for Apple?",

@@ -3,7 +3,9 @@
 Owner: Retrieval & Modeling Lead
 """
 from __future__ import annotations
+
 import time
+
 from finrag_eval.common import Chunk, RetrievalResult
 from finrag_eval.retrieval.bm25 import BM25Retriever
 from finrag_eval.retrieval.dense import DenseRetriever
