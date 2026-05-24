@@ -1,4 +1,3 @@
-cat > tests / retrieval / test_bm25.py << "EOF"
 """Smoke tests for BM25 retriever — requires local corpus data."""
 
 from __future__ import annotations
@@ -71,6 +70,3 @@ def test_chunk_id_format(bm25_labeled):
     results = bm25_labeled.retrieve(QUERIES[0], k=1)
     parts = results[0].chunk.chunk_id.split("_")
     assert len(parts) >= 3
-
-
-EOF
