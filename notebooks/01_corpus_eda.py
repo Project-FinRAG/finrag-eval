@@ -47,14 +47,34 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
-import seaborn as sns
 
-sns.set_theme(style="whitegrid", context="notebook")
 plt.rcParams["figure.dpi"] = 110
+plt.rcParams["axes.grid"] = True
+plt.rcParams["grid.alpha"] = 0.3
 
-CORPUS_STATS = Path("../data/processed/corpus_stats.csv")
-MANIFEST = Path("../data/metadata/corpus_manifest_v0.1.csv")
-CHUNKS_DIR = Path("../data/processed/chunks")
+ROOT = Path.cwd()
+if not (ROOT / "pyproject.toml").exists():
+    ROOT = ROOT.parent
+if not (ROOT / "pyproject.toml").exists():
+    raise RuntimeError(
+        f"Could not locate repo root from {Path.cwd()}. "
+        "Run the notebook from either the repo root or the notebooks/ directory."
+    )
+
+CORPUS_STATS = ROOT / "data/processed/corpus_stats.csv"
+MANIFEST = ROOT / "data/metadata/corpus_manifest_v0.1.csv"
+CHUNKS_DIR = ROOT / "data/processed/chunks"
+
+required_paths = [CORPUS_STATS, MANIFEST, CHUNKS_DIR]
+missing = [p for p in required_paths if not p.exists()]
+if missing:
+    raise FileNotFoundError(
+        "Missing required corpus artifacts:\n"
+        + "\n".join(f"  {p}" for p in missing)
+        + "\n\nRegenerate via:\n"
+        "  uv run python scripts/05_corpus_scale_out.py\n"
+        "  uv run python scripts/generate_corpus_manifest.py"
+    )
 
 # Authoritative sector taxonomy for the v0.1 corpus.
 # Note: the sector map in scripts/05_corpus_scale_out.py is incomplete (omits
@@ -101,9 +121,12 @@ print(f"Sector coverage complete: {manifest['sector'].value_counts().to_dict()}"
 #
 # **Scale:**
 # - 198 filings
-# - 49 companies (27 tech, 31 financial — note Berkshire is counted as financial)
-# - Fiscal years 2022–2026 (4 years per company is typical; some companies
-#   have 3 or 5 due to differing fiscal calendars and FY2026 still rolling in)
+# - 50 companies across technology and financial services (exact per-sector
+#   counts computed below)
+# - Filing years 2022–2026 (note: filing year, not fiscal year — a 10-K
+#   filed in calendar 2025 typically reports FY2024 results)
+# - Approximately 4 years per company; some companies have 3 or 5 due to
+#   differing fiscal calendars and FY2026 still rolling in
 # - 59,822 chunks
 # - 117 million characters of cleaned filing text
 
@@ -244,11 +267,18 @@ print(sector_tier_pct.round(1))
 # legitimate cases where Item 8 (Financial Statements) is huge.
 
 # %% [markdown]
-# ### 2c. The four failure modes
+# ### 2c. Four failure modes plus one recovery category
 #
-# ADR-0002 names four root causes for non-section_aware filings.
+# ADR-0002 characterizes non-clean tier assignments by root cause. Four of
+# the five categories are genuine parser-level failures; the fifth
+# (`large_item8_legit`) flags filings that *pass* via the relaxed dominance
+# gate because their large Item 8 is legitimate document content, not a
+# parser artifact.
+#
 # This is the methodology contribution: rather than discarding 12% of the
-# corpus as opaque "fallbacks," we characterize what went wrong and why.
+# corpus as opaque "fallbacks," we characterize what went wrong and why,
+# *and* we name the legitimate edge cases the relaxation rule was designed
+# to admit.
 
 # %%
 fm_counts = manifest["failure_mode"].value_counts()
@@ -404,41 +434,115 @@ else:
 # the downstream workstreams.
 
 # %% [markdown]
-# ### 4a. Section-label distribution across section_aware chunks
+# ### 4a. Section-label distribution across the full corpus
 #
-# Section-aware chunks carry semantic Item labels. The distribution
-# across Items determines what kinds of QA pairs are well-supported.
+# Section-labeled chunks (from `section_aware` and `hybrid_section_aware`
+# filings) carry semantic Item labels. The distribution across Items
+# determines what kinds of QA pairs are well-supported, and how many
+# companies actually have content in each Item.
 
 # %%
-sample_files = [f for f in CHUNKS_DIR.glob("*.jsonl")
-                if not f.name.startswith(("MS_", "C_", "INTC_"))][:30]
-items = Counter()
-total_chunks = 0
-for f in sample_files:
-    with f.open() as fh:
+# Full-corpus item-level composition.
+# Walks every section-labeled chunk (section_aware + hybrid_section_aware),
+# computes count, average tokens, and unique-company coverage per Item.
+item_counts: Counter = Counter()
+item_tokens: dict[str, int] = {}
+item_companies: dict[str, set[str]] = {}
+total_labeled_chunks = 0
+labeled_files = 0
+
+for f in sorted(CHUNKS_DIR.glob("*.jsonl")):
+    file_has_labeled = False
+    with f.open(encoding="utf-8") as fh:
         for line in fh:
             c = json.loads(line)
-            if c.get("chunking_method") == "section_aware":
-                total_chunks += 1
-                sec = c.get("section_label", "")
-                if " - " in sec:
-                    items[sec.split(" - ")[0]] += 1
+            if c.get("chunking_method") in {"section_aware", "hybrid_section_aware"}:
+                total_labeled_chunks += 1
+                file_has_labeled = True
+                section = c.get("section_label", "")
+                if " - " in section:
+                    item = section.split(" - ")[0]
+                    item_counts[item] += 1
+                    item_tokens[item] = item_tokens.get(item, 0) + c.get("token_count", 0)
+                    item_companies.setdefault(item, set()).add(c["ticker"])
+    if file_has_labeled:
+        labeled_files += 1
 
-print(f"Sample: {len(sample_files)} files, {total_chunks:,} section_aware chunks")
-print("\nTop 10 section labels by chunk count:")
-for item, n in items.most_common(10):
-    print(f"  {item:25s} {n:5d}  ({n/total_chunks:.1%})")
+print(f"Full corpus: {labeled_files} section-labeled filings, "
+      f"{total_labeled_chunks:,} section-labeled chunks\n")
+
+# Top 10 Items with detail columns
+n_companies_total = 50
+rows = []
+for item, n in item_counts.most_common(10):
+    avg_tokens = item_tokens[item] / n if n else 0
+    coverage = len(item_companies[item])
+    rows.append({
+        "item": item,
+        "chunks": n,
+        "share_of_labeled": f"{n / total_labeled_chunks:.1%}",
+        "avg_tokens": round(avg_tokens),
+        "companies_covered": f"{coverage}/{n_companies_total}",
+    })
+item_df = pd.DataFrame(rows)
+print("Top 10 Items by chunk count:")
+print(item_df.to_string(index=False))
 
 # %% [markdown]
-# Item 8 (Financial Statements) dominates by chunk count — roughly 37% of
-# section_aware chunks come from Item 8. Item 7 (MD&A), Item 1A (Risk Factors),
-# and Item 1 (Business) follow. This distribution matches the analytical
-# content of 10-Ks: Financial Statements and MD&A together account for
-# more than half of section_aware retrievable text.
-
-# %% [markdown]
-# ### 4b. What this means for the QA workstream
+# Item 8 (Financial Statements) dominates by chunk count. Item 7 (MD&A),
+# Item 1A (Risk Factors), and Item 1 (Business) follow. This distribution
+# matches the analytical content of 10-Ks: Financial Statements and MD&A
+# together account for more than half of section-labeled retrievable text.
 #
+# **Coverage notes.** All major Items (1, 1A, 7, 8) show 47/50 companies
+# because the 3 fixed_size filers (MS, C, INTC) have no section labels at
+# all — that 47/50 reflects parser failure, not document structure.
+#
+# Item 1C (Cybersecurity) is a separate case worth flagging: it became
+# an SEC disclosure requirement for fiscal years ending after December
+# 2023, so it only appears in 132 of 198 filings (4 in 2023 as early
+# adopters, then 46/47/35 across 2024–2026). QA pairs targeting Item 1C
+# should restrict to filings from those years; the manifest's
+# `filing_year` column makes this filter trivial.
+
+# %% [markdown]
+# ### 4b. Sector-level structural differences
+#
+# Tech and financial filings differ substantially in length and section
+# composition. These differences shape what retrieval should expect.
+
+# %%
+sector_struct = manifest.groupby("sector").agg(
+    n_filings=("filing_id", "count"),
+    avg_chars=("total_chars", "mean"),
+    avg_item7_chars=("item_7_chars", "mean"),
+    avg_largest_section_ratio=("largest_section_ratio", "mean"),
+    section_aware_pct=("chunking_method",
+                      lambda s: (s == "section_aware").mean()),
+).round(3)
+sector_struct["avg_chars"] = sector_struct["avg_chars"].round(0)
+sector_struct["avg_item7_chars"] = sector_struct["avg_item7_chars"].round(0)
+print("Sector-level structural comparison:")
+print(sector_struct)
+
+# %% [markdown]
+# Financial filings are roughly 2.25x the size of tech filings on average,
+# and Item 7 (MD&A) content is 3.1x larger in financials — reflecting the
+# more extensive narrative analysis that banks, insurers, and asset
+# managers provide on liquidity, risk, and capital position. Tech filings
+# parse cleanly more often (88% strict section_aware vs 76.5% for
+# financial), reflecting greater format consistency in tech 10-Ks. The
+# dominance-ratio difference between sectors is modest (0.39 vs 0.35),
+# so Item 8 isn't dramatically more dominant in financials — both sectors
+# have reasonably distributed section content. The takeaway for retrieval:
+# section-aware chunking gives proportionally more benefit on financial
+# filings because there's simply more substantive section-labeled content
+# to surface (3x more MD&A text per filing).
+# %% [markdown]
+# ### 4c. What this means for the QA workstream
+
+# %% [markdown]
+
 # - **First ~50 QA pairs** should target `section_aware` filings exclusively
 #   to validate the retrieval system on the highest-quality subset.
 #   AAPL, GOOGL, GS, NVDA, MA, V are reliable choices.
@@ -453,7 +557,7 @@ for item, n in items.most_common(10):
 #   questions where retrieval-strategy matters less
 
 # %% [markdown]
-# ### 4c. What this means for the retrieval workstream
+# ### 4d. What this means for the retrieval workstream
 #
 # The retrieval comparison (section-aware vs fixed-size) operates on
 # overlapping subsets of the corpus:
@@ -484,12 +588,13 @@ for item, n in items.most_common(10):
 #    `fixed_size` (12, 6.1%). Total 93.9% section-labeled — a meaningful
 #    improvement over the 80% baseline of the binary classification.
 #
-# 3. **Four named failure modes:** Non-clean filings characterized by
-#    structural root cause: non-standard format (MS, C, INTC),
-#    incorporation by reference (IBM, WFC), dominant-section parser
-#    failure (JPM, USB), and parser limitation on Item 7 (MSFT, BAC).
-#    Plus 8 filings legitimately recovered by the relaxed dominance gate
-#    (MET, PRU as insurers with genuinely large Item 8).
+# 3. **Four failure modes plus one recovery category:** Non-clean filings
+#    characterized by structural root cause: non-standard format (MS, C,
+#    INTC), incorporation by reference (IBM, WFC), dominant-section parser
+#    failure (JPM, USB), and parser limitation on Item 7 (MSFT, BAC). Plus
+#    8 filings legitimately recovered by the relaxed dominance gate (MET,
+#    PRU as insurers with genuinely large Item 8 sections that are real
+#    document content, not parser artifacts).
 #
 # 4. **Temporal stability:** Failure modes are company-specific, not
 #    year-specific. 7 of 8 multi-year failure companies fail identically
