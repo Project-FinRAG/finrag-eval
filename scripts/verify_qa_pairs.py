@@ -5,16 +5,16 @@ Checks per pair:
   - qa_id is unique
   - All required schema fields present
   - For each gold_evidence entry:
-      * The chunk_id exists in data/processed/chunks/
-      * The ticker and accession in the citation match the chunk's metadata
-      * If 'quote' is provided, it appears in the chunk's text (with some
-        normalization for whitespace)
+      * The chunk_id exists in data/processed/chunks/  (skipped in --schema-only mode)
+      * The ticker and accession in the citation match the chunk's metadata  (skipped in --schema-only)
+      * If 'quote' is provided, it appears in the chunk's text  (skipped in --schema-only)
 
 Exit code 0 if all pairs valid, non-zero otherwise.
 
 Usage:
     uv run python scripts/verify_qa_pairs.py
     uv run python scripts/verify_qa_pairs.py path/to/qa_pairs.jsonl
+    uv run python scripts/verify_qa_pairs.py --schema-only   # CI mode (no corpus needed)
 """
 from __future__ import annotations
 
@@ -69,14 +69,19 @@ def load_chunk_index() -> dict[str, dict]:
     return index
 
 
-def verify(qa_path: Path) -> int:
+def verify(qa_path: Path, schema_only: bool = False) -> int:
     if not qa_path.exists():
         sys.exit(f"FATAL: {qa_path} not found.")
 
-    print(f"Loading chunk index from {CHUNKS_DIR}...")
-    chunk_index = load_chunk_index()
-    print(f"  Loaded {len(chunk_index):,} chunks across {len(list(CHUNKS_DIR.glob('*.jsonl')))} files")
-    print()
+    chunk_index: dict[str, dict] = {}
+    if schema_only:
+        print("Running in schema-only mode (chunk_id existence not verified).")
+        print()
+    else:
+        print(f"Loading chunk index from {CHUNKS_DIR}...")
+        chunk_index = load_chunk_index()
+        print(f"  Loaded {len(chunk_index):,} chunks across {len(list(CHUNKS_DIR.glob('*.jsonl')))} files")
+        print()
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -132,6 +137,14 @@ def verify(qa_path: Path) -> int:
                     errors.append(f"{tag}: missing fields: {missing_ev}")
                     continue
                 cid = ev["chunk_id"]
+
+                if schema_only:
+                    # Sanity-check chunk_id shape only. Full existence check
+                    # requires the corpus, which isn't available in CI.
+                    if not isinstance(cid, str) or not cid:
+                        errors.append(f"{tag}: chunk_id must be a non-empty string")
+                    continue
+
                 if cid not in chunk_index:
                     errors.append(f"{tag}: chunk_id {cid!r} not found in corpus")
                     continue
@@ -176,5 +189,22 @@ def verify(qa_path: Path) -> int:
 
 
 if __name__ == "__main__":
-    path = Path(sys.argv[1]) if len(sys.argv) > 1 else QA_PATH
-    sys.exit(verify(path))
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Verify QA pairs JSONL against corpus and schema."
+    )
+    parser.add_argument(
+        "path",
+        nargs="?",
+        default=str(QA_PATH),
+        help=f"Path to qa_pairs.jsonl (default: {QA_PATH})",
+    )
+    parser.add_argument(
+        "--schema-only",
+        action="store_true",
+        help="Validate schema only; skip chunk_id existence checks. Use in CI "
+        "environments where data/processed/chunks/ is not available.",
+    )
+    args = parser.parse_args()
+    sys.exit(verify(Path(args.path), schema_only=args.schema_only))

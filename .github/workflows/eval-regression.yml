@@ -32,5 +32,5 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Verify QA pairs schema and chunk_ids
-        run: uv run python scripts/verify_qa_pairs.py
+      - name: Verify QA pairs schema
+        run: uv run python scripts/verify_qa_pairs.py --schema-only
