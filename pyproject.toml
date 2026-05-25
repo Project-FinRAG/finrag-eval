@@ -68,6 +68,7 @@ dev = [
     "pre-commit>=4.0",
     "ipykernel>=6.29",
     "ipython>=8.28",
+    "jupytext>=1.19",
 ]
 
 [project.scripts]
