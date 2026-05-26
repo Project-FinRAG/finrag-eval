@@ -1,6 +1,6 @@
 """Dense retriever using OpenAI embeddings + ChromaDB.
 
-Owner: Retrieval & Modeling Lead (interim: Mayank, while Vidhee is out)
+Owner: Retrieval & Modeling Lead (interim)
 
 Uses OpenAI's text-embedding-3-small (1536-dim) for embeddings and ChromaDB
 for the persistent vector index. The retriever satisfies the Retriever
@@ -13,14 +13,18 @@ Per-query embedding adds ~50ms of API latency to retrieval.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import time
 from pathlib import Path
+from typing import Any, cast
 
 import chromadb
+from chromadb.api import ClientAPI
+from chromadb.api.models.Collection import Collection
 from chromadb.config import Settings
 from dotenv import load_dotenv
-from openai import OpenAI, RateLimitError, APIError
+from openai import APIError, OpenAI, RateLimitError
 
 from finrag_eval.common import Chunk, RetrievalResult
 
@@ -65,8 +69,8 @@ class DenseRetriever:
         self.batch_size = batch_size
 
         self._client: OpenAI | None = None
-        self._chroma: chromadb.PersistentClient | None = None
-        self._collection: chromadb.Collection | None = None
+        self._chroma: ClientAPI | None = None
+        self._collection: Collection | None = None
         self._last_latency_ms: float = 0.0
 
     # ---- internal helpers ------------------------------------------------
@@ -76,7 +80,7 @@ class DenseRetriever:
             self._client = OpenAI(api_key=_load_api_key())
         return self._client
 
-    def _ensure_chroma(self) -> chromadb.PersistentClient:
+    def _ensure_chroma(self) -> ClientAPI:
         if self._chroma is None:
             self.index_path.mkdir(parents=True, exist_ok=True)
             self._chroma = chromadb.PersistentClient(
@@ -97,13 +101,13 @@ class DenseRetriever:
                 )
                 return [d.embedding for d in resp.data]
             except RateLimitError:
-                wait = 2 ** attempt
+                wait = 2**attempt
                 print(f"  rate-limited, sleeping {wait}s (attempt {attempt + 1}/{MAX_RETRIES})")
                 time.sleep(wait)
             except APIError as e:
                 if attempt == MAX_RETRIES - 1:
                     raise
-                wait = 2 ** attempt
+                wait = 2**attempt
                 print(f"  API error ({e!r}), retrying in {wait}s")
                 time.sleep(wait)
 
@@ -115,10 +119,8 @@ class DenseRetriever:
         """Embed chunks in batches, upsert into ChromaDB. Persists to disk."""
         chroma = self._ensure_chroma()
         # Recreate collection if it exists (avoid mixing old + new embeddings)
-        try:
+        with contextlib.suppress(Exception):
             chroma.delete_collection(self.collection_name)
-        except Exception:
-            pass
         self._collection = chroma.create_collection(
             name=self.collection_name,
             metadata={
@@ -139,7 +141,7 @@ class DenseRetriever:
             self._collection.add(
                 ids=[c.chunk_id for c in batch],
                 documents=texts,
-                embeddings=embeddings,
+                embeddings=embeddings,  # type: ignore[arg-type]
                 metadatas=[
                     {
                         "ticker": c.ticker,
@@ -187,23 +189,30 @@ class DenseRetriever:
 
         # Query the collection
         result = self._collection.query(
-            query_embeddings=[query_embedding],
+            query_embeddings=[query_embedding],  # type: ignore[arg-type]
             n_results=k,
             include=["documents", "metadatas", "distances"],
         )
 
-        # Chroma returns lists-of-lists (one inner list per query); we only have one
-        ids = result["ids"][0]
-        docs = result["documents"][0]
-        metas = result["metadatas"][0]
-        distances = result["distances"][0]
+        # Chroma returns lists-of-lists (one inner list per query); we only have one.
+        # The query returns typed dict where docs/metadatas/distances are Optional;
+        # they're always present given our include= args, so cast for mypy.
+        ids: list[str] = result["ids"][0]
+        # result["documents"], ["metadatas"], ["distances"] are Optional in the
+        # type stubs, but always present given our include= args. Cast each
+        # inner list explicitly so mypy understands the unpacking that follows.
+        docs = cast(list[str], result["documents"][0])  # type: ignore[index]
+        metas = cast(list[dict[str, Any]], result["metadatas"][0])  # type: ignore[index]
+        distances = cast(list[float], result["distances"][0])  # type: ignore[index]
 
         # Build RetrievalResult objects. Chroma's cosine distance is 1 - cos_sim,
         # so score = 1 - distance (higher = more relevant).
         from finrag_eval.common.types import FilingType
 
         results: list[RetrievalResult] = []
-        for rank, (cid, doc, meta, dist) in enumerate(zip(ids, docs, metas, distances), start=1):
+        for rank, (cid, doc, meta, dist) in enumerate(
+            zip(ids, docs, metas, distances, strict=True), start=1
+        ):
             chunk = Chunk(
                 chunk_id=cid,
                 filing_accession=meta["filing_accession"],
