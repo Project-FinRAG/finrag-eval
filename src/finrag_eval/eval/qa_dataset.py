@@ -32,12 +32,32 @@ class QADataset:
         self._pairs: list[QAPair] = []
 
     def load(self) -> None:
-        # TODO(@eval-lead): read JSONL, parse each line as QAPair
-        raise NotImplementedError("QADataset.load is not yet implemented")
+        """Read JSONL, parse each line as a QAPair."""
+        if not self.path.exists():
+            raise FileNotFoundError(
+                f"QA dataset not found at {self.path}. "
+                "Expected JSONL with one QAPair per line."
+            )
+        pairs: list[QAPair] = []
+        with self.path.open(encoding="utf-8") as f:
+            for line_no, line in enumerate(f, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    pairs.append(QAPair.model_validate_json(line))
+                except Exception as e:
+                    raise ValueError(
+                        f"Failed to parse QA pair at line {line_no} of {self.path}: {e}"
+                    ) from e
+        self._pairs = pairs
 
     def save(self) -> None:
-        # TODO(@eval-lead): write self._pairs as JSONL
-        raise NotImplementedError("QADataset.save is not yet implemented")
+        """Write self._pairs as JSONL."""
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("w", encoding="utf-8") as f:
+            for pair in self._pairs:
+                f.write(pair.model_dump_json() + "\n")
 
     def __iter__(self) -> Iterator[QAPair]:
         return iter(self._pairs)
@@ -50,5 +70,10 @@ class QADataset:
         question_type: str | None = None,
         difficulty: str | None = None,
     ) -> list[QAPair]:
-        # TODO(@eval-lead): return filtered subset for stratified analysis
-        raise NotImplementedError("QADataset.filter is not yet implemented")
+        """Return pairs matching the given filters. Both filters are optional and AND-combined."""
+        result = list(self._pairs)
+        if question_type is not None:
+            result = [p for p in result if p.question_type == question_type]
+        if difficulty is not None:
+            result = [p for p in result if p.difficulty == difficulty]
+        return result
