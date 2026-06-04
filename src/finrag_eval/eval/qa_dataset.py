@@ -35,8 +35,7 @@ class QADataset:
         """Read JSONL, parse each line as a QAPair."""
         if not self.path.exists():
             raise FileNotFoundError(
-                f"QA dataset not found at {self.path}. "
-                "Expected JSONL with one QAPair per line."
+                f"QA dataset not found at {self.path}. Expected JSONL with one QAPair per line."
             )
         pairs: list[QAPair] = []
         with self.path.open(encoding="utf-8") as f:
