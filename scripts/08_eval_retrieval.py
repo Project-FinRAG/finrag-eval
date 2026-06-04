@@ -1,17 +1,26 @@
 """Retrieval evaluation harness — first real research-phase output.
 
-Runs a retriever over the held-out QA dataset and reports Recall@k, MRR,
-nDCG@10, and evidence-hit@10. This is the retrieval-only evaluation;
-end-to-end answer evaluation (with a generator and judge) comes later.
+Runs one or more retrievers over the held-out QA dataset and reports
+Recall@k, MRR, nDCG@10, and evidence_hit@10. This is the retrieval-only
+evaluation; end-to-end answer evaluation (generator + judge) comes later.
 
 Usage:
     uv run python scripts/08_eval_retrieval.py
     uv run python scripts/08_eval_retrieval.py --retriever bm25 --strategy labeled
-    uv run python scripts/08_eval_retrieval.py --output data/eval_runs/bm25_labeled.json
+    uv run python scripts/08_eval_retrieval.py --retriever dense
+    uv run python scripts/08_eval_retrieval.py --retriever hybrid
+    uv run python scripts/08_eval_retrieval.py --retriever all --output data/eval_runs/compare.json
+
+Note:
+    dense, hybrid, and all require --strategy labeled: the only dense index
+    built is chroma_dense_labeled (collection 'finrag_dense'). dense/hybrid
+    runs embed each query via the OpenAI API, so OPENAI_API_KEY must be set
+    (DenseRetriever loads it from the environment or a .env file).
 
 Output:
-    - Per-question table printed to stdout
-    - Aggregate metrics overall and stratified by question_type
+    - Per-question table printed to stdout (per retriever)
+    - Aggregate metrics overall and stratified by question_type and difficulty
+    - In --retriever all mode, a side-by-side overall comparison table
     - Optional JSON file with full results for later comparison
 """
 
@@ -32,24 +41,35 @@ from finrag_eval.eval.metrics import (
     recall_at_k,
 )
 from finrag_eval.eval.qa_dataset import QADataset
-from finrag_eval.retrieval.bm25 import BM25Retriever, load_chunks_from_jsonl
+from finrag_eval.retrieval import (
+    BM25Retriever,
+    DenseRetriever,
+    HybridRetriever,
+    Retriever,
+)
+from finrag_eval.retrieval.bm25 import load_chunks_from_jsonl
 
 DEFAULT_QA_PATH = Path("data/qa_dataset/qa_pairs.jsonl")
 DEFAULT_INDEX_DIR = Path("data/indexes")
 
+# The persistent dense index. Do NOT rebuild it from the eval harness — it is
+# costly to recreate (~$0.60 + ~5 min). We only ever connect to it read-only.
+DENSE_INDEX_PATH = DEFAULT_INDEX_DIR / "chroma_dense_labeled"
+DENSE_COLLECTION = "finrag_dense"
 
-def build_retriever(name: str, strategy: str) -> BM25Retriever:
-    """Build a retriever and index it on the requested chunk strategy.
 
-    Today only BM25 is implemented; dense and hybrid will be added once
-    Vidhee's DenseRetriever lands.
-    """
-    if name != "bm25":
+def _require_labeled(name: str, strategy: str) -> None:
+    """dense/hybrid/all only work against the labeled dense index."""
+    if strategy != "labeled":
         raise ValueError(
-            f"Only 'bm25' is implemented today. Got {name!r}. "
-            "Dense and hybrid retrievers are pending."
+            f"--retriever {name} requires --strategy labeled "
+            f"(the only dense index built is {DENSE_INDEX_PATH.name}, "
+            f"collection {DENSE_COLLECTION!r}). Got --strategy {strategy!r}."
         )
 
+
+def _build_bm25(strategy: str) -> BM25Retriever:
+    """Load the BM25 index for a strategy, building it only if absent."""
     index_path = DEFAULT_INDEX_DIR / f"bm25_{strategy}"
     retriever = BM25Retriever(index_path=index_path)
 
@@ -65,9 +85,48 @@ def build_retriever(name: str, strategy: str) -> BM25Retriever:
     return retriever
 
 
+def _build_dense() -> DenseRetriever:
+    """Connect to the existing persistent dense index (read-only, no rebuild)."""
+    retriever = DenseRetriever(
+        index_path=DENSE_INDEX_PATH,
+        collection_name=DENSE_COLLECTION,
+    )
+    print(
+        f"Connecting to dense index at {DENSE_INDEX_PATH} "
+        f"(collection {DENSE_COLLECTION!r})"
+    )
+    retriever.load()
+    return retriever
+
+
+def build_retriever(name: str, strategy: str) -> Retriever:
+    """Build a single retriever, indexing/loading as needed."""
+    if name == "bm25":
+        return _build_bm25(strategy)
+    if name == "dense":
+        _require_labeled(name, strategy)
+        return _build_dense()
+    if name == "hybrid":
+        _require_labeled(name, strategy)
+        bm25 = _build_bm25("labeled")
+        dense = _build_dense()
+        return HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
+    raise ValueError(f"Unknown retriever {name!r}.")
+
+
+def build_all_retrievers(strategy: str) -> list[Retriever]:
+    """Build bm25, dense, and hybrid once, sharing the bm25/dense instances."""
+    _require_labeled("all", strategy)
+    bm25 = _build_bm25("labeled")
+    dense = _build_dense()
+    hybrid = HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
+    retrievers: list[Retriever] = [bm25, dense, hybrid]
+    return retrievers
+
+
 def evaluate_pair(
     pair: QAPair,
-    retriever: BM25Retriever,
+    retriever: Retriever,
     k_values: list[int],
 ) -> dict:
     """Run retrieval for a single QA pair and compute all metrics."""
@@ -123,6 +182,16 @@ def aggregate(results: list[dict], k_values: list[int], group_by: str | None = N
     return agg
 
 
+def _run_payload(results: list[dict], k_values: list[int]) -> dict:
+    """Per-run JSON payload shared by single-retriever and compare modes."""
+    return {
+        "per_question": results,
+        "aggregate_overall": aggregate(results, k_values),
+        "aggregate_by_type": aggregate(results, k_values, group_by="question_type"),
+        "aggregate_by_difficulty": aggregate(results, k_values, group_by="difficulty"),
+    }
+
+
 def print_table(results: list[dict], k_values: list[int]) -> None:
     """Per-question results table."""
     print(f"\n{'='*100}")
@@ -173,13 +242,39 @@ def print_aggregates(results: list[dict], k_values: list[int]) -> None:
             print(f"    {key:<20} {val}")
 
 
+def print_comparison(overall_by_retriever: dict[str, dict], k_values: list[int]) -> None:
+    """Side-by-side overall metrics, one row per retriever."""
+    max_k = max(k_values)
+    columns: list[tuple[str, str]] = []
+    for k in k_values:
+        columns.append((f"R@{k}", f"recall@{k}"))
+    columns.append(("MRR", "mrr"))
+    columns.append((f"nDCG@{max_k}", f"ndcg@{max_k}"))
+    for k in k_values:
+        columns.append((f"EH@{k}", f"evidence_hit@{k}"))
+    columns.append(("lat(ms)", "mean_latency_ms"))
+
+    w = 11
+    header = f"{'retriever':<10}" + "".join(f"{label:>{w}}" for label, _ in columns)
+    print(f"\n{'=' * len(header)}")
+    print("THREE-WAY COMPARISON (overall)")
+    print("=" * len(header))
+    print(header)
+    print("-" * len(header))
+    for name, agg in overall_by_retriever.items():
+        row = f"{name:<10}" + "".join(f"{agg.get(key, ''):>{w}}" for _, key in columns)
+        print(row)
+    print()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--qa-path", type=Path, default=DEFAULT_QA_PATH,
                         help=f"Path to qa_pairs.jsonl (default: {DEFAULT_QA_PATH})")
     parser.add_argument("--retriever", default="bm25",
-                        choices=["bm25"],
-                        help="Retriever to evaluate (default: bm25)")
+                        choices=["bm25", "dense", "hybrid", "all"],
+                        help="Retriever to evaluate (default: bm25). "
+                             "dense/hybrid/all require --strategy labeled.")
     parser.add_argument("--strategy", default="labeled",
                         choices=["labeled", "strict", "fixed_size", "all"],
                         help="Chunk-loading strategy (default: labeled = "
@@ -196,23 +291,57 @@ def main() -> int:
     print(f"k values:   {args.k}")
     print()
 
-    # Load QA pairs
+    # Load QA pairs (materialize so we can iterate once per retriever).
     dataset = QADataset(args.qa_path)
     dataset.load()
-    print(f"Loaded {len(dataset)} QA pairs.\n")
+    pairs = list(dataset)
+    print(f"Loaded {len(pairs)} QA pairs.\n")
 
-    # Build/load retriever
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    if args.retriever == "all":
+        retrievers = build_all_retrievers(args.strategy)
+
+        runs: dict[str, list[dict]] = {}
+        overall_by_retriever: dict[str, dict] = {}
+        for retriever in retrievers:
+            print(f"\n\n{'#' * 80}")
+            print(f"# RETRIEVER: {retriever.name}")
+            print(f"{'#' * 80}")
+            results = [evaluate_pair(pair, retriever, args.k) for pair in pairs]
+            print_table(results, args.k)
+            print_aggregates(results, args.k)
+            runs[retriever.name] = results
+            overall_by_retriever[retriever.name] = aggregate(results, args.k)
+
+        print_comparison(overall_by_retriever, args.k)
+
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "mode": "compare",
+                "retrievers": [r.name for r in retrievers],
+                "strategy": args.strategy,
+                "qa_path": str(args.qa_path),
+                "k_values": args.k,
+                "timestamp": timestamp,
+                "n_pairs": len(pairs),
+                "runs": {name: _run_payload(r, args.k) for name, r in runs.items()},
+                "comparison_overall": overall_by_retriever,
+            }
+            args.output.write_text(json.dumps(payload, indent=2, default=str))
+            print(f"\nResults saved to {args.output}")
+        return 0
+
+    # Single-retriever path (unchanged output shape).
     retriever = build_retriever(args.retriever, args.strategy)
 
-    # Run evaluation
     print("\nRunning evaluation...")
-    results = [evaluate_pair(pair, retriever, args.k) for pair in dataset]
+    results = [evaluate_pair(pair, retriever, args.k) for pair in pairs]
 
-    # Print results
     print_table(results, args.k)
     print_aggregates(results, args.k)
 
-    # Save if requested
     if args.output:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         output_payload = {
@@ -220,12 +349,9 @@ def main() -> int:
             "strategy": args.strategy,
             "qa_path": str(args.qa_path),
             "k_values": args.k,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": timestamp,
             "n_pairs": len(results),
-            "per_question": results,
-            "aggregate_overall": aggregate(results, args.k),
-            "aggregate_by_type": aggregate(results, args.k, group_by="question_type"),
-            "aggregate_by_difficulty": aggregate(results, args.k, group_by="difficulty"),
+            **_run_payload(results, args.k),
         }
         args.output.write_text(json.dumps(output_payload, indent=2, default=str))
         print(f"\nResults saved to {args.output}")
