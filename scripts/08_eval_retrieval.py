@@ -39,6 +39,7 @@ from finrag_eval.eval.metrics import (
     mean_reciprocal_rank,
     ndcg_at_k,
     recall_at_k,
+    soft_recall_at_k,
 )
 from finrag_eval.eval.qa_dataset import QADataset
 from finrag_eval.retrieval import (
@@ -156,6 +157,7 @@ def evaluate_pair(
     }
     for k in k_values:
         metrics[f"recall@{k}"] = round(recall_at_k(retrieved_ids, gold_ids, k), 3)
+        metrics[f"soft_recall@{k}"] = round(soft_recall_at_k(results, pair.gold_evidence, k), 3)
         metrics[f"evidence_hit@{k}"] = round(evidence_hit_rate(retrieved_ids, gold_ids, k), 3)
     metrics["mrr"] = round(mean_reciprocal_rank(retrieved_ids, gold_ids), 3)
     metrics[f"ndcg@{max_k}"] = round(ndcg_at_k(retrieved_ids, gold_ids, max_k), 3)
@@ -183,6 +185,7 @@ def aggregate(results: list[dict], k_values: list[int], group_by: str | None = N
     agg: dict[str, float | int] = {"n": len(results)}
     for k in k_values:
         agg[f"recall@{k}"] = round(mean(r[f"recall@{k}"] for r in results), 3)
+        agg[f"soft_recall@{k}"] = round(mean(r[f"soft_recall@{k}"] for r in results), 3)
         agg[f"evidence_hit@{k}"] = round(mean(r[f"evidence_hit@{k}"] for r in results), 3)
     agg["mrr"] = round(mean(r["mrr"] for r in results), 3)
     agg[f"ndcg@{max_k}"] = round(mean(r[f"ndcg@{max_k}"] for r in results), 3)
@@ -258,6 +261,7 @@ def print_comparison(overall_by_retriever: dict[str, dict], k_values: list[int])
     columns: list[tuple[str, str]] = []
     for k in k_values:
         columns.append((f"R@{k}", f"recall@{k}"))
+        columns.append((f"S@{k}", f"soft_recall@{k}"))
     columns.append(("MRR", "mrr"))
     columns.append((f"nDCG@{max_k}", f"ndcg@{max_k}"))
     for k in k_values:
