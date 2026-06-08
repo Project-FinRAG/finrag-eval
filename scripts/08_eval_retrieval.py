@@ -29,7 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
 
@@ -92,10 +92,7 @@ def _build_dense() -> DenseRetriever:
         index_path=DENSE_INDEX_PATH,
         collection_name=DENSE_COLLECTION,
     )
-    print(
-        f"Connecting to dense index at {DENSE_INDEX_PATH} "
-        f"(collection {DENSE_COLLECTION!r})"
-    )
+    print(f"Connecting to dense index at {DENSE_INDEX_PATH} (collection {DENSE_COLLECTION!r})")
     retriever.load()
     return retriever
 
@@ -112,16 +109,27 @@ def build_retriever(name: str, strategy: str) -> Retriever:
         bm25 = _build_bm25("labeled")
         dense = _build_dense()
         return HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
+    if name == "reranked":
+        _require_labeled(name, strategy)
+        bm25 = _build_bm25("labeled")
+        dense = _build_dense()
+        hybrid = HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
+        from finrag_eval.retrieval.reranker import RerankedRetriever
+
+        return RerankedRetriever(base_retriever=hybrid, initial_k=50)
     raise ValueError(f"Unknown retriever {name!r}.")
 
 
 def build_all_retrievers(strategy: str) -> list[Retriever]:
-    """Build bm25, dense, and hybrid once, sharing the bm25/dense instances."""
+    """Build bm25, dense, hybrid, and reranked once, sharing bm25/dense instances."""
     _require_labeled("all", strategy)
+    from finrag_eval.retrieval.reranker import RerankedRetriever
+
     bm25 = _build_bm25("labeled")
     dense = _build_dense()
     hybrid = HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
-    retrievers: list[Retriever] = [bm25, dense, hybrid]
+    reranked = RerankedRetriever(base_retriever=hybrid, initial_k=50)
+    retrievers: list[Retriever] = [bm25, dense, hybrid, reranked]
     return retrievers
 
 
@@ -197,7 +205,7 @@ def _run_payload(results: list[dict], k_values: list[int]) -> dict:
 
 def print_table(results: list[dict], k_values: list[int]) -> None:
     """Per-question results table."""
-    print(f"\n{'='*100}")
+    print(f"\n{'=' * 100}")
     print(f"{'qa_id':<8} {'type':<22} {'diff':<7} {'n_gold':<7}", end="")
     for k in k_values:
         print(f" R@{k:<3}", end="")
@@ -205,8 +213,10 @@ def print_table(results: list[dict], k_values: list[int]) -> None:
     print("=" * 100)
 
     for r in results:
-        print(f"{r['qa_id']:<8} {str(r['question_type']):<22} "
-              f"{r['difficulty']:<7} {r['n_gold']:<7}", end="")
+        print(
+            f"{r['qa_id']:<8} {r['question_type']!s:<22} {r['difficulty']:<7} {r['n_gold']:<7}",
+            end="",
+        )
         for k in k_values:
             print(f" {r[f'recall@{k}']:<5}", end="")
         print(f"  {r['mrr']:<6} {r[f'ndcg@{max(k_values)}']:<7} {r['latency_ms']}")
@@ -216,14 +226,14 @@ def print_table(results: list[dict], k_values: list[int]) -> None:
 def print_aggregates(results: list[dict], k_values: list[int]) -> None:
     """Overall + stratified aggregates."""
     overall = aggregate(results, k_values)
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("AGGREGATE METRICS (overall)")
     print("=" * 70)
     for key, val in overall.items():
         print(f"  {key:<20} {val}")
 
     by_type = aggregate(results, k_values, group_by="question_type")
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("BY QUESTION TYPE")
     print("=" * 70)
     for qt, agg in by_type.items():
@@ -234,7 +244,7 @@ def print_aggregates(results: list[dict], k_values: list[int]) -> None:
             print(f"    {key:<20} {val}")
 
     by_diff = aggregate(results, k_values, group_by="difficulty")
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("BY DIFFICULTY")
     print("=" * 70)
     for diff, agg in by_diff.items():
@@ -273,20 +283,37 @@ def print_comparison(overall_by_retriever: dict[str, dict], k_values: list[int])
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--qa-path", type=Path, default=DEFAULT_QA_PATH,
-                        help=f"Path to qa_pairs.jsonl (default: {DEFAULT_QA_PATH})")
-    parser.add_argument("--retriever", default="bm25",
-                        choices=["bm25", "dense", "hybrid", "all"],
-                        help="Retriever to evaluate (default: bm25). "
-                             "dense/hybrid/all require --strategy labeled.")
-    parser.add_argument("--strategy", default="labeled",
-                        choices=["labeled", "strict", "fixed_size", "all"],
-                        help="Chunk-loading strategy (default: labeled = "
-                             "section_aware + hybrid_section_aware)")
-    parser.add_argument("--k", nargs="+", type=int, default=[5, 10],
-                        help="k values for Recall@k and evidence_hit@k (default: 5 10)")
-    parser.add_argument("--output", type=Path, default=None,
-                        help="Optional path to save results JSON for later comparison")
+    parser.add_argument(
+        "--qa-path",
+        type=Path,
+        default=DEFAULT_QA_PATH,
+        help=f"Path to qa_pairs.jsonl (default: {DEFAULT_QA_PATH})",
+    )
+    parser.add_argument(
+        "--retriever",
+        default="bm25",
+        choices=["bm25", "dense", "hybrid", "reranked", "all"],
+        help="Retriever to evaluate (default: bm25). dense/hybrid/all require --strategy labeled.",
+    )
+    parser.add_argument(
+        "--strategy",
+        default="labeled",
+        choices=["labeled", "strict", "fixed_size", "all"],
+        help="Chunk-loading strategy (default: labeled = section_aware + hybrid_section_aware)",
+    )
+    parser.add_argument(
+        "--k",
+        nargs="+",
+        type=int,
+        default=[5, 10],
+        help="k values for Recall@k and evidence_hit@k (default: 5 10)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Optional path to save results JSON for later comparison",
+    )
     args = parser.parse_args()
 
     print(f"Retriever:  {args.retriever}")
@@ -301,7 +328,7 @@ def main() -> int:
     pairs = list(dataset)
     print(f"Loaded {len(pairs)} QA pairs.\n")
 
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(UTC).isoformat()
 
     if args.retriever == "all":
         retrievers = build_all_retrievers(args.strategy)

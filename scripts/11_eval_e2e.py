@@ -87,12 +87,18 @@ def build_retriever(name: str, strategy: str) -> Retriever:
     if name == "hybrid":
         _require_labeled(name, strategy)
         return HybridRetriever(bm25=_build_bm25("labeled"), dense=_build_dense(), rrf_k=60)
+    if name == "reranked":
+        _require_labeled(name, strategy)
+        hybrid = HybridRetriever(bm25=_build_bm25("labeled"), dense=_build_dense(), rrf_k=60)
+        from finrag_eval.retrieval.reranker import RerankedRetriever
+
+        return RerankedRetriever(base_retriever=hybrid, initial_k=50)
     raise ValueError(f"Unknown retriever {name!r}.")
 
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="End-to-end answer eval.")
-    p.add_argument("--retriever", choices=["bm25", "dense", "hybrid"], default="hybrid")
+    p.add_argument("--retriever", choices=["bm25", "dense", "hybrid", "reranked"], default="hybrid")
     p.add_argument("--strategy", default="labeled")
     p.add_argument("--qa-path", type=Path, default=DEFAULT_QA_PATH)
     p.add_argument("--top-k", type=int, default=10, help="Passages fed to the generator.")

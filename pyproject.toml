@@ -16,38 +16,32 @@ dependencies = [
     "python-dotenv>=1.0",
     "structlog>=24.4",
     "tenacity>=9.0",
-
     # Ingestion
     "requests>=2.32",
     "beautifulsoup4>=4.12",
     "lxml>=5.3",
     "sec-edgar-downloader>=5.0",
-
     # Retrieval
     "rank-bm25>=0.2.2",
-    
-
     # Synthesis
     "openai>=1.50",
     "anthropic>=0.39",
     "tiktoken>=0.8",
-
     # Evaluation
-
-
     # API
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
-
     # Frontend
     "streamlit>=1.40",
     "plotly>=5.24",
-
     # Utilities
     "pandas>=2.2",
-    "numpy>=1.26",
+    "numpy>=1.26,<2",
     "tqdm>=4.66",
     "typer>=0.13",
+    "sentence-transformers==3.3.1",
+    "torch==2.2.2",
+    "transformers==4.47.1",
 ]
 
 [project.optional-dependencies]
@@ -164,4 +158,11 @@ exclude_lines = [
 [dependency-groups]
 dev = [
     "matplotlib>=3.10.9",
+]
+
+[tool.uv]
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux'",
 ]
