@@ -61,7 +61,7 @@ class RerankedRetriever:
         scores = model.predict(pairs)
 
         # Step 3: sort by reranker score descending, keep top-k
-        ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
+        ranked = sorted(zip(scores, candidates, strict=True), key=lambda x: x[0], reverse=True)
         results = [
             RetrievalResult(chunk=item.chunk, score=float(score), rank=rank + 1)
             for rank, (score, item) in enumerate(ranked[:k])
@@ -72,3 +72,4 @@ class RerankedRetriever:
 
     def latency_ms(self) -> float:
         return self._last_latency_ms
+        
