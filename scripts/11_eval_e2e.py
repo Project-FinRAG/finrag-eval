@@ -141,6 +141,7 @@ def main() -> None:
     print(f"commit         {report.commit_sha}")
     print(f"n_questions    {report.n_questions}")
     print(f"recall@10      {report.mean_recall_at_10:.3f}")
+    print(f"soft_recall@10 {report.mean_soft_recall_at_10:.3f}")
     print(f"mrr            {report.mean_mrr:.3f}")
     print(f"ndcg@10        {report.mean_ndcg_at_10:.3f}")
     print(f"evidence_hit   {report.mean_evidence_hit:.3f}")
