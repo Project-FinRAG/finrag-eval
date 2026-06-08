@@ -25,6 +25,7 @@ from finrag_eval.eval.metrics import (
     mean_reciprocal_rank,
     ndcg_at_k,
     recall_at_k,
+    soft_recall_at_k,
 )
 from finrag_eval.eval.qa_dataset import QADataset
 from finrag_eval.retrieval.base import Retriever
@@ -36,6 +37,7 @@ logger = logging.getLogger(__name__)
 class PerQuestionResult(BaseModel):
     qa_id: str
     recall_at_10: float
+    soft_recall_at_10: float
     mrr: float
     ndcg_at_10: float
     evidence_hit: float
@@ -59,6 +61,7 @@ class EvalReport(BaseModel):
 
     # Aggregate metrics
     mean_recall_at_10: float
+    mean_soft_recall_at_10: float
     mean_mrr: float
     mean_ndcg_at_10: float
     mean_evidence_hit: float
@@ -156,6 +159,7 @@ class EvalHarness:
                 PerQuestionResult(
                     qa_id=qa.qa_id,
                     recall_at_10=recall_at_k(retrieved_ids, gold, 10),
+                    soft_recall_at_10=soft_recall_at_k(results, qa.gold_evidence, 10),
                     mrr=mean_reciprocal_rank(retrieved_ids, gold),
                     ndcg_at_10=ndcg_at_k(retrieved_ids, gold, 10),
                     evidence_hit=evidence_hit_rate(retrieved_ids, gold, 10),
@@ -184,6 +188,7 @@ class EvalHarness:
             commit_sha=_git_commit_sha(),
             n_questions=n,
             mean_recall_at_10=_mean([pq.recall_at_10 for pq in per_question]),
+            mean_soft_recall_at_10=_mean([pq.soft_recall_at_10 for pq in per_question]),
             mean_mrr=_mean([pq.mrr for pq in per_question]),
             mean_ndcg_at_10=_mean([pq.ndcg_at_10 for pq in per_question]),
             mean_evidence_hit=_mean([pq.evidence_hit for pq in per_question]),
