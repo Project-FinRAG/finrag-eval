@@ -108,16 +108,27 @@ def build_retriever(name: str, strategy: str) -> Retriever:
         bm25 = _build_bm25("labeled")
         dense = _build_dense()
         return HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
+    if name == "reranked":
+        _require_labeled(name, strategy)
+        bm25 = _build_bm25("labeled")
+        dense = _build_dense()
+        hybrid = HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
+        from finrag_eval.retrieval.reranker import RerankedRetriever
+
+        return RerankedRetriever(base_retriever=hybrid, initial_k=50)
     raise ValueError(f"Unknown retriever {name!r}.")
 
 
 def build_all_retrievers(strategy: str) -> list[Retriever]:
-    """Build bm25, dense, and hybrid once, sharing the bm25/dense instances."""
+    """Build bm25, dense, hybrid, and reranked once, sharing bm25/dense instances."""
     _require_labeled("all", strategy)
+    from finrag_eval.retrieval.reranker import RerankedRetriever
+
     bm25 = _build_bm25("labeled")
     dense = _build_dense()
     hybrid = HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
-    retrievers: list[Retriever] = [bm25, dense, hybrid]
+    reranked = RerankedRetriever(base_retriever=hybrid, initial_k=50)
+    retrievers: list[Retriever] = [bm25, dense, hybrid, reranked]
     return retrievers
 
 
@@ -277,7 +288,7 @@ def main() -> int:
     parser.add_argument(
         "--retriever",
         default="bm25",
-        choices=["bm25", "dense", "hybrid", "all"],
+        choices=["bm25", "dense", "hybrid", "reranked", "all"],
         help="Retriever to evaluate (default: bm25). dense/hybrid/all require --strategy labeled.",
     )
     parser.add_argument(
