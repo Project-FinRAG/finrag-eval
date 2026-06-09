@@ -24,7 +24,7 @@ INDEX_DIR = Path("data/indexes")
 
 
 def load_chunks_from_jsonl(
-    strategy: Literal["labeled", "fixed_size", "strict", "all"] = "labeled",
+    strategy: Literal["labeled", "fixed_size", "fixed_size_full", "strict", "all"] = "labeled",
 ) -> list[Chunk]:
     """Load chunks from JSONL files, filtered by chunking strategy.
 
@@ -38,6 +38,8 @@ def load_chunks_from_jsonl(
         allowed = {"section_aware", "hybrid_section_aware"}
     elif strategy == "fixed_size":
         allowed = {"fixed_size"}
+    elif strategy == "fixed_size_full":
+        allowed = {"fixed_size_full"}
     elif strategy == "strict":
         allowed = {"section_aware"}
     else:
