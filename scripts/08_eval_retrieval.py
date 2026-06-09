@@ -29,7 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
 
@@ -53,20 +53,22 @@ from finrag_eval.retrieval.bm25 import load_chunks_from_jsonl
 DEFAULT_QA_PATH = Path("data/qa_dataset/qa_pairs.jsonl")
 DEFAULT_INDEX_DIR = Path("data/indexes")
 
-# The persistent dense index. Do NOT rebuild it from the eval harness — it is
-# costly to recreate (~$0.60 + ~5 min). We only ever connect to it read-only.
-DENSE_INDEX_PATH = DEFAULT_INDEX_DIR / "chroma_dense_labeled"
-DENSE_COLLECTION = "finrag_dense"
+# Persistent dense indexes (one per chunking strategy). Do NOT rebuild from the
+# eval harness — embedding is costly (~$0.60 + ~5 min each). Connect read-only.
+DENSE_INDEXES: dict[str, tuple[Path, str]] = {
+    "labeled": (DEFAULT_INDEX_DIR / "chroma_dense_labeled", "finrag_dense"),
+    "fixed_size_full": (DEFAULT_INDEX_DIR / "chroma_dense_fixed_full", "finrag_dense_fixed"),
+}
 
 
-def _require_labeled(name: str, strategy: str) -> None:
-    """dense/hybrid/all only work against the labeled dense index."""
-    if strategy != "labeled":
+def _resolve_dense(name: str, strategy: str) -> tuple[Path, str]:
+    """dense/hybrid/reranked only work against a strategy with a built dense index."""
+    if strategy not in DENSE_INDEXES:
         raise ValueError(
-            f"--retriever {name} requires --strategy labeled "
-            f"(the only dense index built is {DENSE_INDEX_PATH.name}, "
-            f"collection {DENSE_COLLECTION!r}). Got --strategy {strategy!r}."
+            f"--retriever {name} has no dense index for --strategy {strategy!r}. "
+            f"Built dense indexes: {sorted(DENSE_INDEXES)}."
         )
+    return DENSE_INDEXES[strategy]
 
 
 def _build_bm25(strategy: str) -> BM25Retriever:
@@ -86,13 +88,14 @@ def _build_bm25(strategy: str) -> BM25Retriever:
     return retriever
 
 
-def _build_dense() -> DenseRetriever:
-    """Connect to the existing persistent dense index (read-only, no rebuild)."""
+def _build_dense(strategy: str) -> DenseRetriever:
+    """Connect to the persistent dense index for a strategy (read-only, no rebuild)."""
+    index_path, collection = DENSE_INDEXES[strategy]
     retriever = DenseRetriever(
-        index_path=DENSE_INDEX_PATH,
-        collection_name=DENSE_COLLECTION,
+        index_path=index_path,
+        collection_name=collection,
     )
-    print(f"Connecting to dense index at {DENSE_INDEX_PATH} (collection {DENSE_COLLECTION!r})")
+    print(f"Connecting to dense index at {index_path} (collection {collection!r})")
     retriever.load()
     return retriever
 
@@ -102,17 +105,17 @@ def build_retriever(name: str, strategy: str) -> Retriever:
     if name == "bm25":
         return _build_bm25(strategy)
     if name == "dense":
-        _require_labeled(name, strategy)
-        return _build_dense()
+        _resolve_dense(name, strategy)
+        return _build_dense(strategy)
     if name == "hybrid":
-        _require_labeled(name, strategy)
-        bm25 = _build_bm25("labeled")
-        dense = _build_dense()
+        _resolve_dense(name, strategy)
+        bm25 = _build_bm25(strategy)
+        dense = _build_dense(strategy)
         return HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
     if name == "reranked":
-        _require_labeled(name, strategy)
-        bm25 = _build_bm25("labeled")
-        dense = _build_dense()
+        _resolve_dense(name, strategy)
+        bm25 = _build_bm25(strategy)
+        dense = _build_dense(strategy)
         hybrid = HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
         from finrag_eval.retrieval.reranker import RerankedRetriever
 
@@ -122,11 +125,11 @@ def build_retriever(name: str, strategy: str) -> Retriever:
 
 def build_all_retrievers(strategy: str) -> list[Retriever]:
     """Build bm25, dense, hybrid, and reranked once, sharing bm25/dense instances."""
-    _require_labeled("all", strategy)
+    _resolve_dense("all", strategy)
     from finrag_eval.retrieval.reranker import RerankedRetriever
 
-    bm25 = _build_bm25("labeled")
-    dense = _build_dense()
+    bm25 = _build_bm25(strategy)
+    dense = _build_dense(strategy)
     hybrid = HybridRetriever(bm25=bm25, dense=dense, rrf_k=60)
     reranked = RerankedRetriever(base_retriever=hybrid, initial_k=50)
     retrievers: list[Retriever] = [bm25, dense, hybrid, reranked]
@@ -205,7 +208,7 @@ def _run_payload(results: list[dict], k_values: list[int]) -> dict:
 
 def print_table(results: list[dict], k_values: list[int]) -> None:
     """Per-question results table."""
-    print(f"\n{'=' * 100}")
+    print(f"\n{'='*100}")
     print(f"{'qa_id':<8} {'type':<22} {'diff':<7} {'n_gold':<7}", end="")
     for k in k_values:
         print(f" R@{k:<3}", end="")
@@ -213,10 +216,8 @@ def print_table(results: list[dict], k_values: list[int]) -> None:
     print("=" * 100)
 
     for r in results:
-        print(
-            f"{r['qa_id']:<8} {r['question_type']!s:<22} {r['difficulty']:<7} {r['n_gold']:<7}",
-            end="",
-        )
+        print(f"{r['qa_id']:<8} {str(r['question_type']):<22} "
+              f"{r['difficulty']:<7} {r['n_gold']:<7}", end="")
         for k in k_values:
             print(f" {r[f'recall@{k}']:<5}", end="")
         print(f"  {r['mrr']:<6} {r[f'ndcg@{max(k_values)}']:<7} {r['latency_ms']}")
@@ -226,14 +227,14 @@ def print_table(results: list[dict], k_values: list[int]) -> None:
 def print_aggregates(results: list[dict], k_values: list[int]) -> None:
     """Overall + stratified aggregates."""
     overall = aggregate(results, k_values)
-    print(f"\n{'=' * 70}")
+    print(f"\n{'='*70}")
     print("AGGREGATE METRICS (overall)")
     print("=" * 70)
     for key, val in overall.items():
         print(f"  {key:<20} {val}")
 
     by_type = aggregate(results, k_values, group_by="question_type")
-    print(f"\n{'=' * 70}")
+    print(f"\n{'='*70}")
     print("BY QUESTION TYPE")
     print("=" * 70)
     for qt, agg in by_type.items():
@@ -244,7 +245,7 @@ def print_aggregates(results: list[dict], k_values: list[int]) -> None:
             print(f"    {key:<20} {val}")
 
     by_diff = aggregate(results, k_values, group_by="difficulty")
-    print(f"\n{'=' * 70}")
+    print(f"\n{'='*70}")
     print("BY DIFFICULTY")
     print("=" * 70)
     for diff, agg in by_diff.items():
@@ -283,37 +284,20 @@ def print_comparison(overall_by_retriever: dict[str, dict], k_values: list[int])
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--qa-path",
-        type=Path,
-        default=DEFAULT_QA_PATH,
-        help=f"Path to qa_pairs.jsonl (default: {DEFAULT_QA_PATH})",
-    )
-    parser.add_argument(
-        "--retriever",
-        default="bm25",
-        choices=["bm25", "dense", "hybrid", "reranked", "all"],
-        help="Retriever to evaluate (default: bm25). dense/hybrid/all require --strategy labeled.",
-    )
-    parser.add_argument(
-        "--strategy",
-        default="labeled",
-        choices=["labeled", "strict", "fixed_size", "all"],
-        help="Chunk-loading strategy (default: labeled = section_aware + hybrid_section_aware)",
-    )
-    parser.add_argument(
-        "--k",
-        nargs="+",
-        type=int,
-        default=[5, 10],
-        help="k values for Recall@k and evidence_hit@k (default: 5 10)",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=None,
-        help="Optional path to save results JSON for later comparison",
-    )
+    parser.add_argument("--qa-path", type=Path, default=DEFAULT_QA_PATH,
+                        help=f"Path to qa_pairs.jsonl (default: {DEFAULT_QA_PATH})")
+    parser.add_argument("--retriever", default="bm25",
+                        choices=["bm25", "dense", "hybrid", "reranked", "all"],
+                        help="Retriever to evaluate (default: bm25). "
+                             "dense/hybrid/all require --strategy labeled.")
+    parser.add_argument("--strategy", default="labeled",
+                        choices=["labeled", "strict", "fixed_size", "fixed_size_full", "all"],
+                        help="Chunk-loading strategy (default: labeled = "
+                             "section_aware + hybrid_section_aware)")
+    parser.add_argument("--k", nargs="+", type=int, default=[5, 10],
+                        help="k values for Recall@k and evidence_hit@k (default: 5 10)")
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Optional path to save results JSON for later comparison")
     args = parser.parse_args()
 
     print(f"Retriever:  {args.retriever}")
@@ -328,7 +312,7 @@ def main() -> int:
     pairs = list(dataset)
     print(f"Loaded {len(pairs)} QA pairs.\n")
 
-    timestamp = datetime.now(UTC).isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
 
     if args.retriever == "all":
         retrievers = build_all_retrievers(args.strategy)
