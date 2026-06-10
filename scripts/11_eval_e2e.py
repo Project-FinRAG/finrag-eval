@@ -43,6 +43,11 @@ DEFAULT_INDEX_DIR = Path("data/indexes")
 DENSE_INDEX_PATH = DEFAULT_INDEX_DIR / "chroma_dense_labeled"
 DENSE_COLLECTION = "finrag_dense"
 
+# The 3-large dense index (best retrieval config) — connect read-only.
+LARGE_DENSE_PATH = DEFAULT_INDEX_DIR / "chroma_dense_large_labeled"
+LARGE_DENSE_COLLECTION = "finrag_dense_large"
+LARGE_EMBEDDING_MODEL = "text-embedding-3-large"
+
 # strategy -> human-readable chunker label for the report
 CHUNKER_NAMES = {"labeled": "section_aware", "fixed": "fixed_size"}
 
@@ -78,12 +83,30 @@ def _build_dense() -> DenseRetriever:
     return retriever
 
 
+def _build_dense_large() -> DenseRetriever:
+    retriever = DenseRetriever(
+        embedding_model=LARGE_EMBEDDING_MODEL,
+        index_path=LARGE_DENSE_PATH,
+        collection_name=LARGE_DENSE_COLLECTION,
+    )
+    logger.info(
+        "Connecting to 3-large dense index at %s (collection %r)",
+        LARGE_DENSE_PATH,
+        LARGE_DENSE_COLLECTION,
+    )
+    retriever.load()
+    return retriever
+
+
 def build_retriever(name: str, strategy: str) -> Retriever:
     if name == "bm25":
         return _build_bm25(strategy)
     if name == "dense":
         _require_labeled(name, strategy)
         return _build_dense()
+    if name == "dense-large":
+        _require_labeled(name, strategy)
+        return _build_dense_large()
     if name == "hybrid":
         _require_labeled(name, strategy)
         return HybridRetriever(bm25=_build_bm25("labeled"), dense=_build_dense(), rrf_k=60)
@@ -98,7 +121,11 @@ def build_retriever(name: str, strategy: str) -> Retriever:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="End-to-end answer eval.")
-    p.add_argument("--retriever", choices=["bm25", "dense", "hybrid", "reranked"], default="hybrid")
+    p.add_argument(
+        "--retriever",
+        choices=["bm25", "dense", "dense-large", "hybrid", "reranked"],
+        default="hybrid",
+    )
     p.add_argument("--strategy", default="labeled")
     p.add_argument("--qa-path", type=Path, default=DEFAULT_QA_PATH)
     p.add_argument("--top-k", type=int, default=10, help="Passages fed to the generator.")
