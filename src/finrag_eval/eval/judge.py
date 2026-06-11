@@ -120,11 +120,10 @@ def _kappa(matrix: list[list[int]], n_categories: int, *, weighted: bool) -> flo
             return 0.0 if i == j else 1.0
         return ((i - j) / (n_categories - 1)) ** 2
 
-    observed = sum(
-        weight(i, j) * matrix[i][j]
-        for i in range(n_categories)
-        for j in range(n_categories)
-    ) / total
+    observed = (
+        sum(weight(i, j) * matrix[i][j] for i in range(n_categories) for j in range(n_categories))
+        / total
+    )
     expected = sum(
         weight(i, j) * row_marg[i] * col_marg[j]
         for i in range(n_categories)
@@ -133,6 +132,7 @@ def _kappa(matrix: list[list[int]], n_categories: int, *, weighted: bool) -> flo
     if expected == 0:
         return float("nan")
     return 1.0 - observed / expected
+
 
 class JudgeScore(BaseModel):
     correctness: float  # 0-1
@@ -261,8 +261,7 @@ class AnswerJudge:
         """
         if len(human_scores) != len(judge_scores):
             raise ValueError(
-                f"human/judge score counts differ: "
-                f"{len(human_scores)} vs {len(judge_scores)}"
+                f"human/judge score counts differ: {len(human_scores)} vs {len(judge_scores)}"
             )
         dims = dimensions if dimensions is not None else list(_CALIBRATION_DIMENSIONS)
         unknown = [d for d in dims if d not in _CALIBRATION_DIMENSIONS]

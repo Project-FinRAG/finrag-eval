@@ -59,9 +59,7 @@ def test_abstention_is_binary() -> None:
 
     human = [s(True), s(False), s(True), s(False)]
     judge = [s(True), s(False), s(True), s(False)]
-    out = AnswerJudge().calibrate_against_humans(
-        human, judge, dimensions=["abstention_correct"]
-    )
+    out = AnswerJudge().calibrate_against_humans(human, judge, dimensions=["abstention_correct"])
     assert out["abstention_correct_agreement"] == 1.0
     assert out["abstention_correct_kappa"] == 1.0
 
