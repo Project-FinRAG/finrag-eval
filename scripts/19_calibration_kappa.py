@@ -1,8 +1,8 @@
 """Compute judge-vs-human agreement (Cohen's kappa) from a filled rating sheet.
 
 Reads the human-filled rating sheet (scripts/18) + the judge sidecar, joins on
-item_id, bins both scores to ordinal {0=low, 1=partial, 2=high}, and reports raw
-agreement, Cohen's kappa, and quadratic-weighted kappa on correctness.
+item_id, and reports raw agreement, Cohen's kappa, quadratic-weighted kappa, and
+a confusion matrix on correctness — via AnswerJudge.calibrate_against_humans.
 
 Usage:
     uv run python scripts/19_calibration_kappa.py
@@ -15,39 +15,31 @@ import csv
 import math
 from pathlib import Path
 
+from finrag_eval.eval.judge import AnswerJudge, JudgeScore
+
 DEFAULT_SHEET = Path("data/eval_runs/calibration_sheet.csv")
 DEFAULT_SIDECAR = Path("data/eval_runs/calibration_judge_scores.csv")
 
 
-def _to_ordinal(score: float) -> int:
-    """Bin a 0-1 score into thirds so {0,0.5,1} and the judge's float align."""
+def _stub(correctness: float) -> JudgeScore:
+    """A JudgeScore carrying only correctness; the other fields are unused
+    placeholders (we call calibrate with dimensions=["correctness"])."""
+    return JudgeScore(
+        correctness=correctness,
+        completeness=0.0,
+        faithfulness=0.0,
+        citation_support=0.0,
+        abstention_correct=False,
+        reasoning="",
+    )
+
+
+def _bin(score: float) -> int:
     if score < 1 / 3:
         return 0
     if score < 2 / 3:
         return 1
     return 2
-
-
-def _kappa(matrix: list[list[int]], k: int, *, weighted: bool) -> float:
-    """Cohen's kappa over a k x k confusion matrix; quadratic weights if asked."""
-    total = sum(sum(row) for row in matrix)
-    if total == 0:
-        return float("nan")
-    row_marg = [sum(matrix[i]) for i in range(k)]
-    col_marg = [sum(matrix[i][j] for i in range(k)) for j in range(k)]
-
-    def w(i: int, j: int) -> float:
-        if not weighted:
-            return 0.0 if i == j else 1.0
-        return ((i - j) / (k - 1)) ** 2
-
-    observed = sum(w(i, j) * matrix[i][j] for i in range(k) for j in range(k)) / total
-    expected = sum(
-        w(i, j) * row_marg[i] * col_marg[j] for i in range(k) for j in range(k)
-    ) / (total * total)
-    if expected == 0:
-        return float("nan")
-    return 1.0 - observed / expected
 
 
 def parse_args() -> argparse.Namespace:
@@ -63,7 +55,8 @@ def main() -> None:
     with args.judge_scores.open(newline="") as f:
         judge_by_id = {r["item_id"]: r for r in csv.DictReader(f)}
 
-    pairs: list[tuple[int, int]] = []
+    human_scores: list[JudgeScore] = []
+    judge_scores: list[JudgeScore] = []
     skipped = 0
     with args.sheet.open(newline="") as f:
         for r in csv.DictReader(f):
@@ -72,22 +65,23 @@ def main() -> None:
             if not raw or item_id not in judge_by_id:
                 skipped += 1
                 continue
-            pairs.append(
-                (_to_ordinal(float(raw)), _to_ordinal(float(judge_by_id[item_id]["judge_correctness"])))
-            )
+            human_scores.append(_stub(float(raw)))
+            judge_scores.append(_stub(float(judge_by_id[item_id]["judge_correctness"])))
 
-    if not pairs:
+    if not human_scores:
         raise SystemExit("No rated rows found — fill the human_correctness column first.")
 
-    k = 3
-    matrix = [[0 for _ in range(k)] for _ in range(k)]
-    for h, j in pairs:
-        matrix[h][j] += 1
+    out = AnswerJudge().calibrate_against_humans(
+        human_scores, judge_scores, dimensions=["correctness"]
+    )
+    kappa = out["correctness_kappa"]
+    weighted = out["correctness_kappa_weighted"]
+    agreement = out["correctness_agreement"]
+    n = int(out["correctness_n"])
 
-    n = len(pairs)
-    agreement = sum(matrix[i][i] for i in range(k)) / n
-    kappa = _kappa(matrix, k, weighted=False)
-    weighted = _kappa(matrix, k, weighted=True)
+    matrix = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+    for h, j in zip(human_scores, judge_scores):
+        matrix[_bin(h.correctness)][_bin(j.correctness)] += 1
 
     def fmt(v: float) -> str:
         return "n/a (no rating variance)" if math.isnan(v) else f"{v:.3f}"
@@ -102,7 +96,7 @@ def main() -> None:
     print(f"  weighted kappa      {fmt(weighted)}")
     print()
     print("  confusion (rows = human 0/0.5/1, cols = judge 0/0.5/1):")
-    for i in range(k):
+    for i in range(3):
         print(f"    {['0  ', '0.5', '1  '][i]}  {matrix[i]}")
     print()
     if math.isnan(kappa):

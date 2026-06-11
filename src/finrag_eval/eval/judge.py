@@ -77,6 +77,61 @@ Return a JSON object with exactly these fields and nothing else:
   "abstention_correct": boolean,
   "reasoning": a brief string justifying the scores
 """
+_CALIBRATION_DIMENSIONS: tuple[str, ...] = (
+    "correctness",
+    "completeness",
+    "faithfulness",
+    "citation_support",
+    "abstention_correct",
+)
+
+
+def _to_ordinal(dimension: str, value: float | bool) -> int:
+    """Bin a score to an ordinal category for agreement scoring.
+
+    The four 0-1 dimensions bin into thirds (0=low, 1=partial, 2=high), so a
+    human {0, 0.5, 1} rating and the judge's continuous score land on the same
+    scale. ``abstention_correct`` is already binary (0/1).
+    """
+    if dimension == "abstention_correct":
+        return 1 if value else 0
+    score = float(value)
+    if score < 1 / 3:
+        return 0
+    if score < 2 / 3:
+        return 1
+    return 2
+
+
+def _kappa(matrix: list[list[int]], n_categories: int, *, weighted: bool) -> float:
+    """Cohen's kappa over a square confusion matrix; quadratic weights if asked.
+
+    Returns NaN when agreement is undefined (a single occupied category), rather
+    than a misleading 0 or 1.
+    """
+    total = sum(sum(row) for row in matrix)
+    if total == 0:
+        return float("nan")
+    row_marg = [sum(matrix[i]) for i in range(n_categories)]
+    col_marg = [sum(matrix[i][j] for i in range(n_categories)) for j in range(n_categories)]
+
+    def weight(i: int, j: int) -> float:
+        if not weighted:
+            return 0.0 if i == j else 1.0
+        return ((i - j) / (n_categories - 1)) ** 2
+
+    observed = (
+        sum(weight(i, j) * matrix[i][j] for i in range(n_categories) for j in range(n_categories))
+        / total
+    )
+    expected = sum(
+        weight(i, j) * row_marg[i] * col_marg[j]
+        for i in range(n_categories)
+        for j in range(n_categories)
+    ) / (total * total)
+    if expected == 0:
+        return float("nan")
+    return 1.0 - observed / expected
 
 
 class JudgeScore(BaseModel):
@@ -190,8 +245,41 @@ class AnswerJudge:
         self,
         human_scores: list[JudgeScore],
         judge_scores: list[JudgeScore],
+        dimensions: list[str] | None = None,
     ) -> dict[str, float]:
-        """Compute inter-rater agreement (Cohen's kappa per dimension)."""
-        # TODO(@eval-lead): bin to ordinal categories, compute kappa once a
-        # 20-30 question human-rated subset exists.
-        raise NotImplementedError("AnswerJudge.calibrate_against_humans is not yet implemented")
+        """Inter-rater agreement between human and judge scores, per dimension.
+
+        ``human_scores`` and ``judge_scores`` are parallel lists (same questions,
+        same order). For each requested dimension this returns Cohen's kappa,
+        quadratic-weighted kappa, raw agreement, and the paired count, keyed
+        ``{dim}_kappa`` / ``{dim}_kappa_weighted`` / ``{dim}_agreement`` / ``{dim}_n``.
+        Dimensions with no rating variance yield NaN kappa (undefined, flagged
+        rather than faked).
+
+        ``dimensions`` defaults to all five rubric dimensions; pass a subset (e.g.
+        ``["correctness"]``) when only some dimensions were human-rated.
+        """
+        if len(human_scores) != len(judge_scores):
+            raise ValueError(
+                f"human/judge score counts differ: {len(human_scores)} vs {len(judge_scores)}"
+            )
+        dims = dimensions if dimensions is not None else list(_CALIBRATION_DIMENSIONS)
+        unknown = [d for d in dims if d not in _CALIBRATION_DIMENSIONS]
+        if unknown:
+            raise ValueError(f"unknown dimension(s): {unknown}")
+
+        results: dict[str, float] = {}
+        n = len(human_scores)
+        for dim in dims:
+            k = 2 if dim == "abstention_correct" else 3
+            matrix = [[0 for _ in range(k)] for _ in range(k)]
+            for human, judge in zip(human_scores, judge_scores, strict=True):
+                matrix[_to_ordinal(dim, getattr(human, dim))][
+                    _to_ordinal(dim, getattr(judge, dim))
+                ] += 1
+            agree = sum(matrix[i][i] for i in range(k))
+            results[f"{dim}_kappa"] = _kappa(matrix, k, weighted=False)
+            results[f"{dim}_kappa_weighted"] = _kappa(matrix, k, weighted=True)
+            results[f"{dim}_agreement"] = agree / n if n else float("nan")
+            results[f"{dim}_n"] = float(n)
+        return results
