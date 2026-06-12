@@ -177,7 +177,9 @@ class DenseRetriever:
                 "Run .index() first to build the index."
             ) from e
 
-    def retrieve(self, query: str, k: int = 10) -> list[RetrievalResult]:
+    def retrieve(
+        self, query: str, k: int = 10, where: dict[str, Any] | None = None
+    ) -> list[RetrievalResult]:
         """Embed the query, query Chroma for top-k nearest neighbors."""
         if self._collection is None:
             raise RuntimeError("Index not built or loaded. Call .index() or .load() first.")
@@ -191,6 +193,7 @@ class DenseRetriever:
         result = self._collection.query(
             query_embeddings=[query_embedding],  # type: ignore[arg-type]
             n_results=k,
+            where=where,
             include=["documents", "metadatas", "distances"],
         )
 
